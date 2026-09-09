@@ -25,10 +25,7 @@ class AppConfig {
       'SOKONI_WS',
       defaultValue: 'ws://10.0.2.2:8080/v1/stream',
     ),
-    chainId: int.fromEnvironment(
-      'SOKONI_CHAIN_ID',
-      defaultValue: monadTestnet,
-    ),
+    chainId: int.fromEnvironment('SOKONI_CHAIN_ID', defaultValue: monadTestnet),
   );
 
   bool get isMainnet => chainId == monadMainnet;

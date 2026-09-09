@@ -4,7 +4,10 @@ publish_to: none
 version: 0.1.0+1
 
 environment:
-  sdk: ^3.6.0
+  # >=3.7 deliberately: the Dart formatter only switches to "tall style" when
+  # the package language version is 3.7 or later. Pinning lower made local and
+  # CI formatters disagree about the same file.
+  sdk: ^3.7.0
 
 dependencies:
   flutter:
