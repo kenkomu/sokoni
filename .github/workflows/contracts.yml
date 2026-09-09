@@ -1,6 +1,7 @@
 name: contracts
 
 on:
+  workflow_dispatch:
   push:
     branches: [master, main]
     paths: ['contracts/**', '.github/workflows/contracts.yml']

@@ -1,5 +1,10 @@
 # Sokoni
 
+[![backend](https://github.com/kenkomu/sokoni/actions/workflows/backend.yml/badge.svg)](https://github.com/kenkomu/sokoni/actions/workflows/backend.yml)
+[![mobile](https://github.com/kenkomu/sokoni/actions/workflows/mobile.yml/badge.svg)](https://github.com/kenkomu/sokoni/actions/workflows/mobile.yml)
+[![contracts](https://github.com/kenkomu/sokoni/actions/workflows/contracts.yml/badge.svg)](https://github.com/kenkomu/sokoni/actions/workflows/contracts.yml)
+[![security](https://github.com/kenkomu/sokoni/actions/workflows/security.yml/badge.svg)](https://github.com/kenkomu/sokoni/actions/workflows/security.yml)
+
 A passkey-native, AUSD-denominated mobile trading app on Monad.
 Built for the **Metropolis** hackathon — Onchain Finance & Trading track, Agora bounty.
 Submission deadline **13 Oct 2026**.
@@ -61,6 +66,9 @@ docs/adr/               why things are the way they are
 
 ## Running it
 
+`make help` lists everything. `make ci` runs exactly what CI runs, so green
+locally means green in the pipeline.
+
 ```bash
 docker compose up -d                       # postgres :5433, redis :6380
 docker compose exec -T postgres psql -U sokoni -d sokoni < backend/migrations/0001_init.sql
@@ -96,4 +104,7 @@ Read from mainnet on 2026-09-09, not taken from documentation:
   Until then the Sepolia CTK/AUSD adapter stands in. See ADR 4.
 - **A paid RPC endpoint is a launch requirement**, not an optimisation. See ADR 5.
 - **Flutter is not installed** on this machine yet — needed before Phase 2.
+  Until then `make dart-fmt` / `make dart-check` run the formatter via Docker.
 - **Foundry is 1.7.1**; Monad execution support needs ≥ 1.8.0.
+- **Dart SDK is pinned ≥3.7** on purpose: the formatter only uses tall style at
+  3.7+, and a lower constraint made local and CI formatters disagree.

@@ -1,6 +1,7 @@
 name: mobile
 
 on:
+  workflow_dispatch:
   push:
     branches: [master, main]
     paths: ['mobile/**', '.github/workflows/mobile.yml']
