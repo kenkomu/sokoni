@@ -107,8 +107,10 @@ def build(challenge: bytes, priv: int, k: int, origin: str, rp_id: str, flags: i
     if s > N // 2:
         s = N - s
 
+    # The private key is deliberately NOT emitted. The fixture exists to pin the
+    # public outputs; a golden file has no business carrying a secret-shaped
+    # field, and secret scanners are right to flag one.
     return {
-        "privateKey": hex(priv),
         "x": hex(pub[0]),
         "y": hex(pub[1]),
         "challenge": "0x" + challenge.hex(),
