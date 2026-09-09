@@ -1,0 +1,55 @@
+name: sokoni
+description: Trade on Monad with your fingerprint. Balances in AUSD.
+publish_to: none
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.6.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State & DI. Riverpod for compile-safe providers, no BuildContext lookups.
+  flutter_riverpod: ^2.6.1
+  riverpod_annotation: ^2.6.1
+
+  # Navigation
+  go_router: ^14.6.2
+
+  # Networking
+  dio: ^5.7.0
+  web_socket_channel: ^3.0.1
+
+  # Passkeys. The whole onboarding story: a P256 keypair in the Secure Enclave /
+  # Android Keystore, verified on-chain by Monad's precompile at 0x0100.
+  passkeys: ^2.0.6
+  local_auth: ^2.3.0
+  flutter_secure_storage: ^9.2.4
+
+  # Money. Never a double — mirrors the backend's big.Int + scale.
+  decimal: ^3.0.2
+
+  # Charts for candlesticks
+  fl_chart: ^0.69.2
+
+  # Push notifications for fills and price alerts
+  firebase_core: ^3.8.1
+  firebase_messaging: ^15.1.6
+
+  freezed_annotation: ^2.4.4
+  json_annotation: ^4.9.0
+  intl: ^0.19.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  build_runner: ^2.4.14
+  freezed: ^2.5.7
+  json_serializable: ^6.9.0
+  riverpod_generator: ^2.6.3
+  mocktail: ^1.0.4
+
+flutter:
+  uses-material-design: true

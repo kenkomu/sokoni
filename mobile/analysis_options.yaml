@@ -1,0 +1,18 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  errors:
+    # Money and chain data must not be implicitly dynamic.
+    missing_return: error
+    invalid_assignment: error
+  exclude:
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+
+linter:
+  rules:
+    - always_declare_return_types
+    - avoid_double_and_int_checks
+    - prefer_final_locals
+    - require_trailing_commas
+    - unawaited_futures

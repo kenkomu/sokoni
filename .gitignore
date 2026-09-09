@@ -1,9 +1,23 @@
-node_modules/
-dist/
+# Go
+/backend/bin/
+*.test
+
+# Flutter / Dart
+/mobile/.dart_tool/
+/mobile/build/
+/mobile/.flutter-plugins*
+/mobile/ios/Pods/
+/mobile/android/.gradle/
+*.g.dart
+*.freezed.dart
+
+# Foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+
+# Local
 .env
 .env.*
 !.env.example
 *.log
-contracts/out/
-contracts/cache/
-contracts/broadcast/
