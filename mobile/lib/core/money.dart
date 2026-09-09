@@ -75,7 +75,7 @@ class Money implements Comparable<Money> {
 
     digits = digits.padLeft(decimals + 1, '0');
     final whole = digits.substring(0, digits.length - decimals);
-    var frac = digits
+    final frac = digits
         .substring(digits.length - decimals)
         .replaceAll(RegExp(r'0+$'), '');
     return '${negative ? '-' : ''}$whole${frac.isEmpty ? '' : '.$frac'}';
