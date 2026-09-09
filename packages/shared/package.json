@@ -1,0 +1,1 @@
+{ "name": "@sokoni/shared", "type": "module", "private": true, "main": "src/index.ts" }

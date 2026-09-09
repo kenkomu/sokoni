@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: sokoni
+      POSTGRES_PASSWORD: sokoni
+      POSTGRES_DB: sokoni
+    ports: ["5433:5432"]
+    volumes: ["sokoni_pg:/var/lib/postgresql"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sokoni"]
+      interval: 5s
+      retries: 10
+  redis:
+    image: redis:8-alpine
+    ports: ["6380:6379"]
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: ["sokoni_redis:/data"]
+volumes:
+  sokoni_pg:
+  sokoni_redis:
