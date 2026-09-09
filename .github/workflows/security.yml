@@ -2,7 +2,7 @@ name: security
 
 on:
   push:
-    branches: [master, main]
+    branches: [main, master]
   pull_request:
 
 jobs:
@@ -13,20 +13,32 @@ jobs:
         with:
           fetch-depth: 0
 
-      # This project handles a treasury. A committed private key is not a
-      # style issue, it is a loss of funds, so the check is blocking.
-      - name: Scan for committed secrets
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Run the binary rather than gitleaks-action: the action derives a commit
+      # range from the push event, which is unresolvable on a first push
+      # (<first-commit>^ does not exist) and after a force-push. Scanning full
+      # history is deterministic on every event.
+      - name: Install gitleaks
+        run: |
+          VERSION=8.24.3
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      # This project handles a treasury. A committed private key is not a style
+      # issue, it is a loss of funds, so the check is blocking.
+      - name: Scan full history
+        run: gitleaks detect --source . --redact --no-banner -v
+
+      - name: Scan working tree
+        run: gitleaks detect --source . --no-git --redact --no-banner -v
 
   key-shapes:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # A belt-and-braces grep for the shapes gitleaks might not know: a bare
-      # 32-byte hex private key, and mnemonic-looking .env values.
+      # Belt and braces for the shape gitleaks' default rules miss: a bare
+      # 32-byte hex private key sitting in source or config.
       - name: Reject raw private key material
         run: |
           if grep -rInE '(^|[^0-9a-fA-Fx])0x[0-9a-fA-F]{64}([^0-9a-fA-F]|$)' \

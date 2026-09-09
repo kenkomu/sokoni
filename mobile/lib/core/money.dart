@@ -29,7 +29,9 @@ class Money implements Comparable<Money> {
     var frac = dot == -1 ? '' : body.substring(dot + 1);
 
     if (frac.length > decimals) {
-      throw FormatException('$value has more precision than $decimals decimals');
+      throw FormatException(
+        '$value has more precision than $decimals decimals',
+      );
     }
     frac = frac.padRight(decimals, '0');
 
@@ -73,7 +75,9 @@ class Money implements Comparable<Money> {
 
     digits = digits.padLeft(decimals + 1, '0');
     final whole = digits.substring(0, digits.length - decimals);
-    var frac = digits.substring(digits.length - decimals).replaceAll(RegExp(r'0+$'), '');
+    var frac = digits
+        .substring(digits.length - decimals)
+        .replaceAll(RegExp(r'0+$'), '');
     return '${negative ? '-' : ''}$whole${frac.isEmpty ? '' : '.$frac'}';
   }
 

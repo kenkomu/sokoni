@@ -36,7 +36,10 @@ class _Placeholder extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Text('Sokoni', style: TextStyle(fontSize: 32, fontWeight: FontWeight.w700)),
+            const Text(
+              'Sokoni',
+              style: TextStyle(fontSize: 32, fontWeight: FontWeight.w700),
+            ),
             const SizedBox(height: 8),
             Text(config.isMainnet ? 'Monad mainnet' : 'Monad testnet'),
           ],

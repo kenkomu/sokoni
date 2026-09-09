@@ -24,9 +24,7 @@ abstract final class SokoniTheme {
       colorScheme: scheme,
       scaffoldBackgroundColor: scheme.surface,
       // Prices, sizes and balances must line up in columns.
-      textTheme: Typography.material2021().black.apply(
-            fontFamily: 'Inter',
-          ),
+      textTheme: Typography.material2021().black.apply(fontFamily: 'Inter'),
       extensions: [SokoniColors(bid: _bidGreen, ask: _askRed)],
     );
   }
