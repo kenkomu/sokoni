@@ -21,3 +21,6 @@ contracts/broadcast/
 .env.*
 !.env.example
 *.log
+
+# Foundry deps (installed by CI)
+contracts/lib/

@@ -1,0 +1,45 @@
+name: contracts
+
+on:
+  push:
+    branches: [master, main]
+    paths: ['contracts/**', '.github/workflows/contracts.yml']
+  pull_request:
+    paths: ['contracts/**', '.github/workflows/contracts.yml']
+
+concurrency:
+  group: contracts-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: contracts
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          # Monad execution support landed in Foundry 1.8. Pin so CI and local
+          # agree — a passing build on an older toolchain proves less than it
+          # looks like it does.
+          version: stable
+
+      - name: Install forge-std
+        run: forge install foundry-rs/forge-std --no-git || true
+
+      - name: Format check
+        run: forge fmt --check
+
+      - name: Build
+        run: forge build --sizes
+
+      # The P256 precompile does not exist on a bare local EVM, so the tests
+      # that matter run forked against Monad.
+      - name: Test (forked against Monad)
+        run: forge test -vvv --fork-url https://rpc.monad.xyz

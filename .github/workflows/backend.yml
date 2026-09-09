@@ -1,0 +1,71 @@
+name: backend
+
+on:
+  push:
+    branches: [master, main]
+    paths: ['backend/**', '.github/workflows/backend.yml']
+  pull_request:
+    paths: ['backend/**', '.github/workflows/backend.yml']
+
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: backend
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: sokoni
+          POSTGRES_PASSWORD: sokoni
+          POSTGRES_DB: sokoni
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U sokoni"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:8-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::these files need gofmt:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Apply migrations
+        env:
+          PGPASSWORD: sokoni
+        run: psql -h localhost -U sokoni -d sokoni -v ON_ERROR_STOP=1 -f migrations/0001_init.sql
+
+      # -race matters here: the indexer, the token bucket and the WS hub are all
+      # concurrent, and a data race in a ledger is a money bug.
+      - name: go test
+        env:
+          DATABASE_URL: postgres://sokoni:sokoni@localhost:5432/sokoni
+          REDIS_URL: redis://localhost:6379
+        run: go test -race -count=1 ./...
+
+      - name: go build
+        run: go build ./...

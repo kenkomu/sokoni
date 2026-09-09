@@ -1,0 +1,38 @@
+name: security
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # This project handles a treasury. A committed private key is not a
+      # style issue, it is a loss of funds, so the check is blocking.
+      - name: Scan for committed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  key-shapes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # A belt-and-braces grep for the shapes gitleaks might not know: a bare
+      # 32-byte hex private key, and mnemonic-looking .env values.
+      - name: Reject raw private key material
+        run: |
+          if grep -rInE '(^|[^0-9a-fA-Fx])0x[0-9a-fA-F]{64}([^0-9a-fA-F]|$)' \
+              --include='*.go' --include='*.dart' --include='*.sol' \
+              --include='*.yaml' --include='*.yml' --include='*.env*' . ; then
+            echo "::error::a 64-hex-char literal looks like a private key. Move it to a secret."
+            exit 1
+          fi
+          echo "no raw key material found"
