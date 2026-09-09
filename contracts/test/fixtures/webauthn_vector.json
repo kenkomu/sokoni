@@ -1,0 +1,18 @@
+{
+  "privateKey": "0x1f2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+  "x": "0xfd4d8ec9c2bca971a7c901f7d25b431ec447b8249206d6539ae6f8e7cd9ac1e2",
+  "y": "0xe10a681aba417fd0a31eb462a6dfb8f06a5443a3aa207b0edb95eba1f2bcb60c",
+  "challenge": "0x1eca235ecd76d3ccc8479e6bbef4346ec18235f7815c2dde47b38367829d3944",
+  "challengeB64": "HsojXs1208zIR55rvvQ0bsGCNfeBXC3eR7ODZ4KdOUQ",
+  "clientDataJSON": "{\"type\":\"webauthn.get\",\"challenge\":\"HsojXs1208zIR55rvvQ0bsGCNfeBXC3eR7ODZ4KdOUQ\",\"origin\":\"https://sokoni.app\",\"crossOrigin\":false}",
+  "authenticatorData": "0x6b4acac5333939cbe4e8b6d4861c3f455146a279a0cec6fa65b45ed8bc3054920500000000",
+  "digest": "0x73e1a64814a689296cfcf332ed9e120d5162de14299ada479cd81497f047ef53",
+  "r": "0x7da106dca6e3d72fd2556297e7d1a02ff6d5b6d0a3887f54442f0e57fdd8a7af",
+  "s": "0x4af1a9d0cc10e5dd63790511595f32f5760809fd9ccb7fd929ff749dc7bc0c47",
+  "sHigh": "0xb50e562e33ef1a239c86faeea6a0cd0a46def0b00a4c1eabc9ba562534a7190a",
+  "typeIndex": 1,
+  "challengeIndex": 23,
+  "flags": 5,
+  "origin": "https://sokoni.app",
+  "rpId": "sokoni.app"
+}

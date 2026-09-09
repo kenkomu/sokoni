@@ -6,9 +6,23 @@ test = "test"
 solc_version = "0.8.28"
 optimizer = true
 optimizer_runs = 200
-# Monad raises the contract size limit to 128 KB (from Ethereum's 24 KB).
-# We stay well under, but the ceiling is worth knowing.
 via_ir = false
+
+# Run the local EVM with Monad's rules: its precompiles (notably secp256r1 at
+# 0x0100, which plain Foundry does not have), gas model, opcode pricing and the
+# 128 KB contract size limit.
+#
+# This is why the toolchain floor is Foundry 1.8 — releases before it have no
+# Monad execution support, and on them every P-256 test fails silently in the
+# most misleading way possible: the call "succeeds" and returns empty, which
+# reads as an invalid signature rather than a missing precompile.
+network = "monad"
+
+# Needed by SokoniAccount.t.sol, which shells out to script/gen_webauthn_vector.py
+# to sign a userOpHash it only learns at runtime. Without it the account tests
+# could only ever replay one frozen fixture, which would not prove the account
+# validates signatures it has never seen.
+ffi = true
 
 [profile.default.fuzz]
 runs = 256

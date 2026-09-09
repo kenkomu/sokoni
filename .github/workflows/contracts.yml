@@ -3,7 +3,7 @@ name: contracts
 on:
   workflow_dispatch:
   push:
-    branches: [master, main]
+    branches: [main, master]
     paths: ['contracts/**', '.github/workflows/contracts.yml']
   pull_request:
     paths: ['contracts/**', '.github/workflows/contracts.yml']
@@ -26,21 +26,45 @@ jobs:
 
       - uses: foundry-rs/foundry-toolchain@v1
         with:
-          # Monad execution support landed in Foundry 1.8. Pin so CI and local
-          # agree — a passing build on an older toolchain proves less than it
-          # looks like it does.
           version: stable
 
-      - name: Install forge-std
-        run: forge install foundry-rs/forge-std --no-git || true
+      # Monad execution support landed in Foundry 1.8. On anything older the
+      # P-256 precompile at 0x0100 is simply absent, and the failure is
+      # maximally misleading: staticcall "succeeds" returning empty, which reads
+      # as an invalid signature rather than a missing precompile. Fail loudly.
+      - name: Require Foundry >= 1.8
+        run: |
+          v=$(forge --version | sed -n 's/^forge Version: \([0-9]*\.[0-9]*\).*/\1/p')
+          echo "forge $v"
+          major=${v%%.*}; minor=${v##*.}
+          if [ "$major" -lt 1 ] || { [ "$major" -eq 1 ] && [ "$minor" -lt 8 ]; }; then
+            echo "::error::Foundry $v has no Monad execution support; need >= 1.8"
+            exit 1
+          fi
+
+      # The account tests shell out to the Python signer to sign a userOpHash
+      # they only learn at runtime.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Regenerate the frozen vector and diff it against the committed golden
+      # file. If the generator drifts, the constants hardcoded in WebAuthn.t.sol
+      # are stale and the tests are asserting against a fixture that no longer
+      # matches what a real authenticator would produce.
+      - name: Vector fixture is reproducible
+        run: |
+          python3 script/gen_webauthn_vector.py > /tmp/vector.json
+          diff -u test/fixtures/webauthn_vector.json /tmp/vector.json \
+            || { echo "::error::WebAuthn fixture drifted; regenerate and update WebAuthn.t.sol"; exit 1; }
 
       - name: Format check
         run: forge fmt --check
 
+      # Runs with `network = "monad"` from foundry.toml: Monad's precompiles,
+      # gas model and 128 KB size limit, locally and with no RPC dependency.
       - name: Build
         run: forge build --sizes
 
-      # The P256 precompile does not exist on a bare local EVM, so the tests
-      # that matter run forked against Monad.
-      - name: Test (forked against Monad)
-        run: forge test -vvv --fork-url https://rpc.monad.xyz
+      - name: Test
+        run: forge test -vv
