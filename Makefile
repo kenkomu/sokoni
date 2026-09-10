@@ -68,9 +68,21 @@ sol-check: ## Format check, build, and test under Monad execution rules
 userop-vector: ## Regenerate the userOp vector shared with the Go backend
 	cd contracts && forge script script/GenUserOpVector.s.sol
 
+.PHONY: deploy-factory
+deploy-factory: ## Deploy SokoniAccountFactory (needs PRIVATE_KEY, ENTRYPOINT)
+	cd contracts && forge script script/DeployFactory.s.sol --rpc-url "$(RPC)" --broadcast
+
 .PHONY: deploy-paymaster
 deploy-paymaster: ## Deploy, fund and stake SokoniPaymaster (needs PRIVATE_KEY, ENTRYPOINT, PAYMASTER_SIGNER)
 	cd contracts && forge script script/DeployPaymaster.s.sol --rpc-url "$(RPC)" --broadcast
+
+.PHONY: gateway
+gateway: ## Run the phone's API (needs the ERC-4337 and gateway settings in .env.example)
+	cd backend && go run ./cmd/gateway
+
+.PHONY: onboard
+onboard: ## Drive one sponsored passkey operation against a live chain and print each step
+	cd backend && go run ./cmd/onboard $(ARGS)
 
 ## -- everything -------------------------------------------------------------
 

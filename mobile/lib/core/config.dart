@@ -7,11 +7,20 @@ class AppConfig {
     required this.apiBaseUrl,
     required this.wsUrl,
     required this.chainId,
+    required this.relyingPartyId,
   });
 
   final String apiBaseUrl;
   final String wsUrl;
   final int chainId;
+
+  /// Domain the passkey is bound to.
+  ///
+  /// The platform will refuse to create or use a credential unless this domain
+  /// serves a Digital Asset Links file naming this app's signing certificate.
+  /// That binding is what stops another app from using our credentials, and it
+  /// is also the first thing to check when registration fails on device.
+  final String relyingPartyId;
 
   static const monadMainnet = 143;
   static const monadTestnet = 10143;
@@ -26,6 +35,10 @@ class AppConfig {
       defaultValue: 'ws://10.0.2.2:8080/v1/stream',
     ),
     chainId: int.fromEnvironment('SOKONI_CHAIN_ID', defaultValue: monadTestnet),
+    relyingPartyId: String.fromEnvironment(
+      'SOKONI_RP_ID',
+      defaultValue: 'sokoni.app',
+    ),
   );
 
   bool get isMainnet => chainId == monadMainnet;

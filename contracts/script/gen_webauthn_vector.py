@@ -172,6 +172,9 @@ def build(challenge: bytes, priv: int, k: int, origin: str, rp_id: str, flags: i
         "coseKey": "0x" + cose_key(pub[0], pub[1]).hex(),
         "authenticatorDataB64": b64url(auth_data),
         "clientDataJSONB64": b64url(client_data_bytes),
+        "credentialId": "0x" + b"sokoni-test-credential".hex(),
+        "attestationObject": "0x"
+        + attestation_object(pub[0], pub[1], b"sokoni-test-credential", rp_id).hex(),
     }
 
 
@@ -217,6 +220,49 @@ def assertion(challenge: bytes, priv: int, flags: int = 0x05, ctype: str = "weba
         "r": "0x%064x" % r,
         "s": "0x%064x" % s,
     }
+
+
+def attestation_object(x: int, y: int, cred_id: bytes, rp_id: str, flags: int = 0x45) -> bytes:
+    """Build the attestationObject a registration returns.
+
+    The COSE key is not handed over directly — it is nested three deep:
+
+        attestationObject = CBOR{fmt, attStmt, authData}
+        authData          = rpIdHash(32) | flags(1) | signCount(4) | attestedCredentialData
+        attested...       = aaguid(16) | credIdLen(2) | credId | COSE_Key
+
+    Flags default to 0x45: UP | UV | AT (attested credential data present).
+    """
+    cose = cose_key(x, y)
+    attested = (
+        b"\x00" * 16                              # aaguid (zero for platform authenticators)
+        + len(cred_id).to_bytes(2, "big")
+        + cred_id
+        + cose
+    )
+    auth_data = (
+        hashlib.sha256(rp_id.encode()).digest()
+        + bytes([flags])
+        + (0).to_bytes(4, "big")
+        + attested
+    )
+
+    def bstr(b: bytes) -> bytes:
+        if len(b) < 24:
+            return bytes([0x40 + len(b)]) + b
+        if len(b) <= 0xFF:
+            return bytes([0x58, len(b)]) + b
+        return bytes([0x59]) + len(b).to_bytes(2, "big") + b
+
+    def tstr(t: str) -> bytes:
+        b = t.encode()
+        return bytes([0x60 + len(b)]) + b
+
+    out = bytearray([0xA3])                       # map of 3
+    out += tstr("fmt") + tstr("none")
+    out += tstr("attStmt") + bytes([0xA0])        # empty map
+    out += tstr("authData") + bstr(auth_data)
+    return bytes(out)
 
 
 if __name__ == "__main__":

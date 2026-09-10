@@ -129,6 +129,51 @@ void main() {
     });
   });
 
+  group('attestation object parsing', () {
+    test('unwraps CBOR -> authData -> attested data -> COSE key', () {
+      final att = parseAttestationObject(hex(v['attestationObject'] as String));
+      expect(att.publicKey.xHex, v['x']);
+      expect(att.publicKey.yHex, v['y']);
+      final credHex =
+          att.credentialId
+              .map((b) => b.toRadixString(16).padLeft(2, '0'))
+              .join();
+      expect('0x$credHex', v['credentialId']);
+    });
+
+    test('rejects an attestation with no attested credential data', () {
+      // Clear the AT flag (0x40) in authData. Without attested credential data
+      // there is no key to register, so this must fail rather than read past.
+      final att = Uint8List.fromList(hex(v['attestationObject'] as String));
+      final marker = utf8.encode('authData');
+      var idx = -1;
+      outer:
+      for (var i = 0; i + marker.length <= att.length; i++) {
+        for (var j = 0; j < marker.length; j++) {
+          if (att[i + j] != marker[j]) continue outer;
+        }
+        idx = i;
+        break;
+      }
+      expect(idx, greaterThan(0));
+      // authData byte string head is 0x58 <len> right after the key.
+      final flagsAt = idx + marker.length + 2 + 32;
+      att[flagsAt] = att[flagsAt] & ~0x40;
+      expect(
+        () => parseAttestationObject(att),
+        throwsA(isA<PasskeyFormatException>()),
+      );
+    });
+
+    test('rejects truncated attestation', () {
+      final att = hex(v['attestationObject'] as String);
+      expect(
+        () => parseAttestationObject(att.sublist(0, 40)),
+        throwsA(isA<PasskeyFormatException>()),
+      );
+    });
+  });
+
   group('assertion decoding', () {
     test('produces the offsets the contract is told to look at', () {
       final assertion = PasskeyCodec.decodeAssertion(

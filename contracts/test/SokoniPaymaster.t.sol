@@ -221,6 +221,30 @@ contract SokoniPaymasterTest is Test {
         _handle(op);
     }
 
+    /// EntryPoint v0.7 `_getRequiredPrefund`: every gas limit the operation
+    /// carries, the paymaster's two included, at maxFeePerGas. It is also
+    /// exactly what the backend's Sponsor.MaxCost computes, so this pair pins
+    /// that Go arithmetic to the EntryPoint's own from both sides. Get it wrong
+    /// low and every sponsored operation is refused; get it wrong high and the
+    /// ceiling protects nothing.
+    uint256 constant EXACT_PREFUND =
+        (600_000 + 400_000 + 100_000 + uint256(PM_VERIFICATION_GAS) + uint256(PM_POSTOP_GAS))
+            * 100 gwei;
+
+    function test_ExactPrefundIsAccepted() public {
+        PackedUserOperation memory op =
+            _sponsoredBump(FOREVER, 0, uint128(EXACT_PREFUND), signerKey);
+        _handle(op);
+        assertEq(counter.value(), 1, "an approval for exactly the prefund must suffice");
+    }
+
+    function test_OneWeiUnderThePrefundIsRefused() public {
+        PackedUserOperation memory op =
+            _sponsoredBump(FOREVER, 0, uint128(EXACT_PREFUND - 1), signerKey);
+        vm.expectRevert();
+        _handle(op);
+    }
+
     /// A truncated or oversized approval must read as invalid, never revert —
     /// a revert in the validation phase takes down the whole bundle.
     function test_MalformedPaymasterDataIsRejectedNotReverted() public {

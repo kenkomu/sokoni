@@ -101,6 +101,29 @@ func (s *Sponsor) SignerAddress() common.Address {
 	return crypto.PubkeyToAddress(s.key.PublicKey)
 }
 
+// MaxCost is the EntryPoint's own prefund arithmetic for this operation once
+// this paymaster sponsors it: every gas limit the operation carries, the
+// paymaster's two included, at the highest price it may pay (EntryPoint v0.7
+// `_getRequiredPrefund`). The contract refuses any approval whose maxCost is
+// below this, so it is exactly the number to sign. SokoniPaymaster.t.sol pins
+// it to the real EntryPoint from both sides: accepted at the exact figure,
+// refused one wei under.
+func (s *Sponsor) MaxCost(op *userop.UserOperation) *big.Int {
+	if op.MaxFeePerGas == nil {
+		return new(big.Int)
+	}
+	total := new(big.Int)
+	for _, g := range []*big.Int{
+		op.VerificationGasLimit, op.CallGasLimit, op.PreVerificationGas,
+		s.VerificationGasLimit, s.PostOpGasLimit,
+	} {
+		if g != nil {
+			total.Add(total, g)
+		}
+	}
+	return total.Mul(total, op.MaxFeePerGas)
+}
+
 // gasLimitsWord is paymasterAndData[20:52] — the two paymaster gas limits as
 // one 32-byte word, which is how the approval digest reads them.
 func (s *Sponsor) gasLimitsWord() ([32]byte, error) {

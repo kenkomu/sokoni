@@ -245,6 +245,28 @@ func (c *Client) Call(ctx context.Context, to string, data string) ([]byte, erro
 	})
 }
 
+// Code returns the deployed bytecode at an address, empty if there is none.
+//
+// The distinction matters for ERC-4337: an account that does not exist yet must
+// carry initCode so the EntryPoint deploys it, and an account that already does
+// must not — sending initCode for a deployed account is rejected as AA10.
+func (c *Client) Code(ctx context.Context, address string) ([]byte, error) {
+	return Retry(ctx, "eth_getCode", 4, func(ctx context.Context) ([]byte, error) {
+		out, err := c.call(ctx, []rpcRequest{{
+			JSONRPC: "2.0", ID: c.seq.Add(1), Method: "eth_getCode",
+			Params: []any{address, "latest"},
+		}})
+		if err != nil {
+			return nil, err
+		}
+		var hex string
+		if err := json.Unmarshal(out[0].Result, &hex); err != nil {
+			return nil, err
+		}
+		return decodeHex(hex)
+	})
+}
+
 func decodeHex(s string) ([]byte, error) {
 	if len(s) >= 2 && s[:2] == "0x" {
 		s = s[2:]
