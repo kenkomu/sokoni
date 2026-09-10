@@ -76,6 +76,45 @@ def b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode().rstrip("=")
 
 
+def der_encode_sig(r: int, s: int) -> bytes:
+    """DER-encode an ECDSA signature, the way an authenticator returns it.
+
+    Platform WebAuthn APIs hand back DER, not raw r||s, so the client has to
+    parse this. Each integer is minimal big-endian two's complement, which
+    means a leading 0x00 whenever the high bit is set — the classic source of
+    off-by-one bugs in hand-rolled parsers.
+    """
+
+    def enc_int(v: int) -> bytes:
+        b = v.to_bytes((v.bit_length() + 7) // 8 or 1, "big")
+        if b[0] & 0x80:
+            b = b"\x00" + b
+        return b"\x02" + bytes([len(b)]) + b
+
+    body = enc_int(r) + enc_int(s)
+    return b"\x30" + bytes([len(body)]) + body
+
+
+def cose_key(x: int, y: int) -> bytes:
+    """CBOR-encoded COSE_Key for an ES256 P-256 credential.
+
+    This is what getPublicKey()/attestationObject yields at registration, and
+    what the client must parse to learn (x, y):
+      {1: 2 (kty EC2), 3: -7 (ES256), -1: 1 (crv P-256), -2: x, -3: y}
+    """
+    def bstr(b: bytes) -> bytes:
+        assert len(b) < 24 or len(b) <= 255
+        return (bytes([0x40 + len(b)]) if len(b) < 24 else bytes([0x58, len(b)])) + b
+
+    out = bytearray([0xA5])          # map of 5 pairs
+    out += bytes([0x01, 0x02])       # 1: 2
+    out += bytes([0x03, 0x26])       # 3: -7
+    out += bytes([0x20, 0x01])       # -1: 1
+    out += bytes([0x21]) + bstr(x.to_bytes(32, "big"))  # -2: x
+    out += bytes([0x22]) + bstr(y.to_bytes(32, "big"))  # -3: y
+    return bytes(out)
+
+
 def build(challenge: bytes, priv: int, k: int, origin: str, rp_id: str, flags: int):
     pub = scalar_mul(priv, (GX, GY))
 
@@ -126,6 +165,13 @@ def build(challenge: bytes, priv: int, k: int, origin: str, rp_id: str, flags: i
         "flags": flags,
         "origin": origin,
         "rpId": rp_id,
+        # Fixtures for the Dart client, which receives these shapes from the
+        # platform WebAuthn API and must parse them.
+        "derSignature": "0x" + der_encode_sig(r, s).hex(),
+        "derSignatureHighS": "0x" + der_encode_sig(r, N - s).hex(),
+        "coseKey": "0x" + cose_key(pub[0], pub[1]).hex(),
+        "authenticatorDataB64": b64url(auth_data),
+        "clientDataJSONB64": b64url(client_data_bytes),
     }
 
 

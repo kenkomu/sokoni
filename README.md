@@ -39,7 +39,7 @@ we have. Read amplification O(N) → O(1). This is the central structural decisi
 
 | | |
 |---|---|
-| Mobile | Flutter 3.6 · Riverpod · passkeys/local_auth |
+| Mobile | Flutter 3.47 · Dart 3.13 · Riverpod · passkeys/local_auth |
 | Backend | Go 1.26 · pgx · Postgres 18 · Redis 8 |
 | Contracts | Foundry (needs ≥ 1.8.0 for Monad execution) |
 | Chain | Monad mainnet 143 / testnet 10143 |
@@ -57,10 +57,15 @@ backend/
   migrations/           schema; projections are safe to drop and replay
 mobile/
   lib/core              config, Money (mirrors the Go type)
+  lib/data/passkey      COSE + DER parsing, low-s normalisation
   lib/data              api client, market stream with gap detection
   lib/design            theme; bid/ask colours separate from the accent
   lib/features          onboarding, markets, trade, portfolio, settings
-contracts/              passkey account + P256 validator
+contracts/
+  src/lib/P256.sol      precompile wrapper, rejects malleable high-s
+  src/lib/WebAuthn.sol  full assertion verification, no on-chain JSON parsing
+  src/SokoniAccount.sol ERC-4337 v0.7, multi-passkey owner set, ERC-1271
+  script/               pure-Python P-256 vector generator (also an ffi signer)
 docs/adr/               why things are the way they are
 ```
 
@@ -103,8 +108,14 @@ Read from mainnet on 2026-09-09, not taken from documentation:
 - **Agora is permissioned.** The treasury address must be whitelisted by Agora.
   Until then the Sepolia CTK/AUSD adapter stands in. See ADR 4.
 - **A paid RPC endpoint is a launch requirement**, not an optimisation. See ADR 5.
-- **Flutter is not installed** on this machine yet — needed before Phase 2.
-  Until then `make dart-fmt` / `make dart-check` run the formatter via Docker.
-- **Foundry is 1.7.1**; Monad execution support needs ≥ 1.8.0.
+- **Foundry must be ≥ 1.8.0.** Older releases have no Monad execution support,
+  and the failure is silent and misleading: the staticcall to the P-256
+  precompile at `0x0100` succeeds returning empty, which is indistinguishable
+  from an invalid signature. `foundry.toml` sets `network = "monad"`, which
+  gives the precompiles, gas model and 128 KB size limit locally — so contract
+  tests need no fork and no RPC.
 - **Dart SDK is pinned ≥3.7** on purpose: the formatter only uses tall style at
   3.7+, and a lower constraint made local and CI formatters disagree.
+- **The client must normalise `s` to the low half** before submitting a
+  signature. Monad's precompile accepts both `(r, s)` and `(r, n−s)`, so the
+  account rejects the high form; `parseDerSignature` normalises at the boundary.

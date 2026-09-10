@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
   push:
     branches: [master, main]
-    paths: ['mobile/**', '.github/workflows/mobile.yml']
+    paths: ['mobile/**', 'contracts/test/fixtures/**', '.github/workflows/mobile.yml']
   pull_request:
-    paths: ['mobile/**', '.github/workflows/mobile.yml']
+    paths: ['mobile/**', 'contracts/test/fixtures/**', '.github/workflows/mobile.yml']
 
 concurrency:
   group: mobile-${{ github.ref }}
@@ -26,6 +26,17 @@ jobs:
         with:
           channel: stable
           cache: true
+
+      # The client and the contract must agree byte-for-byte about the same
+      # WebAuthn vector. Each side being self-consistently wrong is the failure
+      # mode that would otherwise only surface on a real device against a real
+      # chain, so the shared fixture is checked rather than trusted.
+      - name: WebAuthn fixture matches the contracts copy
+        working-directory: .
+        run: |
+          diff -u contracts/test/fixtures/webauthn_vector.json \
+                  mobile/test/fixtures/webauthn_vector.json \
+            || { echo "::error::mobile and contracts WebAuthn fixtures diverged"; exit 1; }
 
       - name: Resolve dependencies
         run: flutter pub get

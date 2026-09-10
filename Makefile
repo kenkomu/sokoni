@@ -1,12 +1,13 @@
 # Sokoni. Three toolchains, one entry point.
 #
 # Every target here is also a CI step, so a green `make ci` locally means a
-# green pipeline. Flutter is not installed on every dev machine yet, so the
-# Dart targets run through Docker.
+# green pipeline.
+#
+# Requires: Go 1.26+, Flutter 3.47+ (~/develop/flutter/bin on PATH),
+# Foundry >= 1.8 (older releases have no Monad execution support).
 
 DB_URL ?= postgres://sokoni:sokoni@localhost:5433/sokoni
 RPC    ?= https://rpc.monad.xyz
-DART   := docker run --rm -v "$(CURDIR)/mobile":/w -w /w dart:stable
 
 .PHONY: help
 help:
@@ -42,12 +43,18 @@ go-check: ## gofmt + vet + race tests
 ## -- mobile -----------------------------------------------------------------
 
 .PHONY: dart-fmt
-dart-fmt: ## Format Dart (via Docker; no local Flutter needed)
-	$(DART) dart format lib test
+dart-fmt: ## Format Dart
+	cd mobile && dart format lib test
 
 .PHONY: dart-check
-dart-check: ## Check Dart formatting
-	$(DART) dart format --output=none --set-exit-if-changed lib test
+dart-check: ## Format check, analyze, test
+	cd mobile && dart format --output=none --set-exit-if-changed lib test
+	cd mobile && flutter analyze
+	cd mobile && flutter test
+
+.PHONY: fixture-sync
+fixture-sync: ## Copy the WebAuthn vector from contracts to mobile
+	cp contracts/test/fixtures/webauthn_vector.json mobile/test/fixtures/webauthn_vector.json
 
 ## -- contracts --------------------------------------------------------------
 

@@ -13,5 +13,10 @@
   "challengeIndex": 23,
   "flags": 5,
   "origin": "https://sokoni.app",
-  "rpId": "sokoni.app"
+  "rpId": "sokoni.app",
+  "derSignature": "0x304402207da106dca6e3d72fd2556297e7d1a02ff6d5b6d0a3887f54442f0e57fdd8a7af02204af1a9d0cc10e5dd63790511595f32f5760809fd9ccb7fd929ff749dc7bc0c47",
+  "derSignatureHighS": "0x304502207da106dca6e3d72fd2556297e7d1a02ff6d5b6d0a3887f54442f0e57fdd8a7af022100b50e562e33ef1a239c86faeea6a0cd0a46def0b00a4c1eabc9ba562534a7190a",
+  "coseKey": "0xa5010203262001215820fd4d8ec9c2bca971a7c901f7d25b431ec447b8249206d6539ae6f8e7cd9ac1e2225820e10a681aba417fd0a31eb462a6dfb8f06a5443a3aa207b0edb95eba1f2bcb60c",
+  "authenticatorDataB64": "a0rKxTM5Ocvk6LbUhhw_RVFGonmgzsb6ZbRe2LwwVJIFAAAAAA",
+  "clientDataJSONB64": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiSHNvalhzMTIwOHpJUjU1cnZ2UTBic0dDTmZlQlhDM2VSN09EWjRLZE9VUSIsIm9yaWdpbiI6Imh0dHBzOi8vc29rb25pLmFwcCIsImNyb3NzT3JpZ2luIjpmYWxzZX0"
 }
