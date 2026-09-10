@@ -18,6 +18,11 @@ via_ir = false
 # reads as an invalid signature rather than a missing precompile.
 network = "monad"
 
+# GenUserOpVector.s.sol writes the golden userOp vector that pins the hashes
+# shared with the Go backend. Scoped to the fixtures directory: nothing else in
+# the tree is writable from Solidity.
+fs_permissions = [{access = "read-write", path = "./test/fixtures"}]
+
 # Needed by SokoniAccount.t.sol, which shells out to script/gen_webauthn_vector.py
 # to sign a userOpHash it only learns at runtime. Without it the account tests
 # could only ever replay one frozen fixture, which would not prove the account

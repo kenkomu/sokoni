@@ -58,6 +58,17 @@ jobs:
           diff -u test/fixtures/webauthn_vector.json /tmp/vector.json \
             || { echo "::error::WebAuthn fixture drifted; regenerate and update WebAuthn.t.sol"; exit 1; }
 
+      # The Go backend computes userOpHash and the paymaster approval digest
+      # from its own implementation. This vector is the only thing tying the two
+      # together, exactly as the WebAuthn fixture ties the contract to the
+      # Flutter client. If the Solidity side changes shape, this step fails here
+      # rather than as an unexplained "AA34 signature error" against a bundler.
+      - name: userOp vector is reproducible
+        run: |
+          forge script script/GenUserOpVector.s.sol
+          git diff --exit-code -- test/fixtures/userop_vector.json \
+            || { echo "::error::userOp vector drifted; run 'make userop-vector' and commit"; exit 1; }
+
       - name: Format check
         run: forge fmt --check
 

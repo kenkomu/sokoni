@@ -59,10 +59,18 @@ fixture-sync: ## Copy the WebAuthn vector from contracts to mobile
 ## -- contracts --------------------------------------------------------------
 
 .PHONY: sol-check
-sol-check: ## Format check, build, and test forked against Monad
+sol-check: ## Format check, build, and test under Monad execution rules
 	cd contracts && forge fmt --check
 	cd contracts && forge build --sizes
-	cd contracts && forge test -vv --fork-url $(RPC)
+	cd contracts && forge test -vv
+
+.PHONY: userop-vector
+userop-vector: ## Regenerate the userOp vector shared with the Go backend
+	cd contracts && forge script script/GenUserOpVector.s.sol
+
+.PHONY: deploy-paymaster
+deploy-paymaster: ## Deploy, fund and stake SokoniPaymaster (needs PRIVATE_KEY, ENTRYPOINT, PAYMASTER_SIGNER)
+	cd contracts && forge script script/DeployPaymaster.s.sol --rpc-url "$(RPC)" --broadcast
 
 ## -- everything -------------------------------------------------------------
 

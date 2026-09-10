@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
   push:
     branches: [master, main]
-    paths: ['backend/**', '.github/workflows/backend.yml']
+    paths: ['backend/**', 'contracts/test/fixtures/**', '.github/workflows/backend.yml']
   pull_request:
-    paths: ['backend/**', '.github/workflows/backend.yml']
+    paths: ['backend/**', 'contracts/test/fixtures/**', '.github/workflows/backend.yml']
 
 concurrency:
   group: backend-${{ github.ref }}
