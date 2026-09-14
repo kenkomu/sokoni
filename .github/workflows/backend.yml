@@ -58,7 +58,11 @@ jobs:
       - name: Apply migrations
         env:
           PGPASSWORD: sokoni
-        run: psql -h localhost -U sokoni -d sokoni -v ON_ERROR_STOP=1 -f migrations/0001_init.sql
+        run: |
+          for f in migrations/*.sql; do
+            echo "applying $f"
+            psql -h localhost -U sokoni -d sokoni -v ON_ERROR_STOP=1 -f "$f"
+          done
 
       # -race matters here: the indexer, the token bucket and the WS hub are all
       # concurrent, and a data race in a ledger is a money bug.
