@@ -29,6 +29,7 @@ import (
 	"github.com/kenkomu/sokoni/backend/internal/id"
 	"github.com/kenkomu/sokoni/backend/internal/paymaster"
 	"github.com/kenkomu/sokoni/backend/internal/store"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -72,15 +73,17 @@ type wiring struct {
 	paymaster  common.Address
 	signerKey  string
 	dsn        string
+	redisURL   string
 	nodeID     int64
 }
 
 func loadConfig() (gateway.Config, wiring, error) {
 	var cfg gateway.Config
 	w := wiring{
-		addr:   env("GATEWAY_ADDR", ":8080"),
-		rpcURL: env("MONAD_RPC_HTTP", chain.TestnetRPC),
-		dsn:    os.Getenv("DATABASE_URL"),
+		addr:     env("GATEWAY_ADDR", ":8080"),
+		rpcURL:   env("MONAD_RPC_HTTP", chain.TestnetRPC),
+		dsn:      os.Getenv("DATABASE_URL"),
+		redisURL: os.Getenv("REDIS_URL"),
 	}
 
 	var err error
@@ -188,12 +191,18 @@ func run(log *slog.Logger) error {
 	}
 	defer closeDB()
 
+	ops, closeOps, err := openOps(w, log)
+	if err != nil {
+		return err
+	}
+	defer closeOps()
+
 	svc := gateway.NewService(cfg, gateway.Deps{
 		Chain:    rpc,
 		Bundler:  bnd,
 		Sponsor:  sponsor,
 		Accounts: accounts,
-		Ops:      gateway.NewMemoryOps(time.Hour, nil),
+		Ops:      ops,
 		Log:      log,
 	})
 
@@ -224,6 +233,30 @@ func run(log *slog.Logger) error {
 		}
 		return err
 	}
+}
+
+// openOps uses Redis when REDIS_URL is set, and memory otherwise. Memory is
+// fine for a laptop and wrong for anything else: a restart forgets every
+// operation between prepare and submit, so a phone that already has a signed
+// assertion for one gets "no such operation" back for something it was just
+// asked to sign.
+func openOps(w wiring, log *slog.Logger) (gateway.PendingOps, func(), error) {
+	if w.redisURL == "" {
+		log.Warn("REDIS_URL not set; operations are in memory and a restart forgets them")
+		return gateway.NewMemoryOps(time.Hour, nil), func() {}, nil
+	}
+	opt, err := redis.ParseURL(w.redisURL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse REDIS_URL: %w", err)
+	}
+	rdb := redis.NewClient(opt)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		rdb.Close()
+		return nil, nil, fmt.Errorf("ping redis: %w", err)
+	}
+	return gateway.NewRedisOps(rdb, time.Hour), func() { rdb.Close() }, nil
 }
 
 // openAccounts uses Postgres when DATABASE_URL is set, and memory otherwise.

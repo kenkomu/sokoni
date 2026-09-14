@@ -221,9 +221,14 @@ refuse roughly one key in 256.
   tested and the wire format is pinned from each, but no device has talked to
   a running gateway yet, and the gateway itself hasn't been pointed at the
   now-deployed testnet paymaster/factory — only `cmd/onboard` has.
-- The gateway keeps prepared operations **in memory**: correct for one
-  instance, wrong for two (prepare on one, submit to another → "no such
-  operation"). Redis before a second instance.
+- Prepared operations now persist in Redis (`internal/gateway/redis_ops.go`)
+  and registered accounts in Postgres — both were in-memory-only until a real
+  restart mid-session lost a live registration and drove this home. Storage
+  is its own JSON shape, not `userop.UserOperation`'s bundler-facing
+  `MarshalJSON`, which has no matching `Unmarshal` and would have meant
+  reconstructing internal fields from a shape never meant to be read back.
+  Concurrency note still open: writes aren't yet a transaction, fine for one
+  instance, not yet safe for two racing the same operation.
 - No rate limiting and no per-account sponsorship caps yet. The balance check
   stops the cheapest drain — empty accounts — but a funded account still costs
   the paymaster gas per operation. Phase 3's risk checks close this.
