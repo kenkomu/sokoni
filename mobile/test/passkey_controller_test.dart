@@ -152,14 +152,16 @@ void main() {
     await c.createPasskey();
     expect(c.state.account?.address, '0xACC7');
 
-    await c.send(to: '0xR', amount: '250000');
+    // Human units in: TST has 6 decimals, so 0.25 TST is 250000 base units.
+    await c.send(to: '0xR', amount: '0.25');
 
     expect(c.state.op?.status, 'landed');
     expect(c.state.op?.blockNumber, 42);
     expect(c.state.error, isNull);
     expect(c.state.isBusy, isFalse);
 
-    // What actually went on the wire: an intent, then the assertion as-is.
+    // What actually went on the wire: base units, converted by Money before
+    // the intent ever left the phone — never the human amount as typed.
     expect(gw.lastBody('POST', '/v1/ops')['intent'], {
       'kind': 'transfer',
       'token': '0xT',
@@ -168,6 +170,37 @@ void main() {
     });
     expect(gw.lastBody('POST', '/v1/ops/op_1/submit'), _assertion.toJson());
   });
+
+  // The bug a live device run actually caught: "1" base unit of an
+  // 18-decimal token is 10^-18 of a token, not one. Money.parse is what
+  // stands between a human typing "1" and that silently happening again.
+  test(
+    'a whole-number amount converts using the token\'s real decimals',
+    () async {
+      final gw = _gateway();
+      final c = _controller(gw, _authenticator());
+      await c.createPasskey();
+
+      await c.send(to: '0xR', amount: '2');
+
+      expect(c.state.error, isNull);
+      expect(gw.lastBody('POST', '/v1/ops')['intent']['amount'], '2000000');
+    },
+  );
+
+  test(
+    'a malformed amount is refused before it ever reaches the gateway',
+    () async {
+      final gw = _gateway();
+      final c = _controller(gw, _authenticator());
+      await c.createPasskey();
+
+      await c.send(to: '0xR', amount: 'not a number');
+
+      expect(c.state.error, contains('digits'));
+      expect(gw.count('POST', '/v1/ops'), 0);
+    },
+  );
 
   test(
     'the biometric signs exactly the prepared challenge, with this key',

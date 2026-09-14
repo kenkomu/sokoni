@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import '../../core/money.dart';
+
 import '../../core/config.dart';
 import '../../data/api/sokoni_api.dart';
 import '../../data/passkey/passkey_authenticator.dart';
@@ -15,6 +17,7 @@ class PasskeyState {
     this.available,
     this.registered,
     this.account,
+    this.config,
     this.lastAssertion,
     this.op,
     this.error,
@@ -25,6 +28,11 @@ class PasskeyState {
   /// Null until checked; false means this device cannot do passkeys at all.
   final bool? available;
   final RegisteredPasskey? registered;
+
+  /// What the gateway is willing to sponsor — chiefly which token, and how
+  /// many decimals it has, so the amount field can speak in whole tokens
+  /// rather than raw base units. Fetched once at startup; needs no auth.
+  final GatewayConfig? config;
 
   /// The account this passkey owns, as the gateway computed it. Known before
   /// anything is deployed: the address is counterfactual.
@@ -42,6 +50,7 @@ class PasskeyState {
     bool? available,
     RegisteredPasskey? registered,
     AccountInfo? account,
+    GatewayConfig? config,
     PasskeyAssertion? lastAssertion,
     OpStatus? op,
     String? error,
@@ -53,11 +62,19 @@ class PasskeyState {
       available: available ?? this.available,
       registered: registered ?? this.registered,
       account: account ?? this.account,
+      config: config ?? this.config,
       lastAssertion: lastAssertion ?? this.lastAssertion,
       op: clearOp ? null : (op ?? this.op),
       error: clearError ? null : (error ?? this.error),
     );
   }
+
+  /// The token the app sends today. Phase 1 sponsors exactly one; a real
+  /// token picker is Phase 2+ scope, once there is more than one to pick.
+  SponsoredToken? get token =>
+      (config?.sponsoredTokens.isEmpty ?? true)
+          ? null
+          : config!.sponsoredTokens.first;
 }
 
 /// Drives the Phase 1 loop on a real device: create a passkey, learn the
@@ -113,6 +130,19 @@ class PasskeyController extends ChangeNotifier {
     _set(_state.copyWith(stage: PasskeyStage.idle, available: ok));
   }
 
+  /// Loads what the gateway is willing to sponsor. Needs no auth, so this
+  /// runs at startup rather than waiting for a passkey — the amount field
+  /// can show "TST" instead of a bare number from the very first frame.
+  Future<void> loadConfig() async {
+    try {
+      final config = await _api.config();
+      _set(_state.copyWith(config: config));
+    } catch (_) {
+      // Silent: the amount field just falls back to unlabelled base units,
+      // and send() will surface the same failure properly when it matters.
+    }
+  }
+
   /// Create a passkey, then learn the account it owns.
   ///
   /// Two steps that fail independently. If the platform made the key but the
@@ -160,10 +190,14 @@ class PasskeyController extends ChangeNotifier {
     _set(_state.copyWith(stage: PasskeyStage.idle, account: account));
   }
 
-  /// Send [amount] base units of the gateway's first sponsored token to [to].
+  /// Send [amount] whole tokens — "1.5", not base units — of the gateway's
+  /// sponsored token to [to].
   ///
   /// The whole Phase 1 gate in one method: prepare, biometric, submit, watch
-  /// it land. The phone never sees calldata, a nonce or a gas price.
+  /// it land. The phone never sees calldata, a nonce or a gas price — and
+  /// now, thanks to [Money], never sees the token's raw base units either.
+  /// A base-unit amount is technically correct and practically useless: on
+  /// an 18-decimal token, typing "1" moves 10^-18 of a token, not one.
   Future<void> send({required String to, required String amount}) async {
     final registered = _state.registered;
     if (registered == null || _state.account == null) return;
@@ -176,8 +210,12 @@ class PasskeyController extends ChangeNotifier {
       ),
     );
     try {
-      final config = await _api.config();
-      if (config.sponsoredTokens.isEmpty) {
+      var token = _state.token;
+      if (token == null) {
+        await loadConfig();
+        token = _state.token;
+      }
+      if (token == null) {
         throw const ApiException(
           statusCode: 0,
           code: 'no_tokens',
@@ -186,13 +224,13 @@ class PasskeyController extends ChangeNotifier {
               'to send.',
         );
       }
-      final token = config.sponsoredTokens.first;
 
+      final baseUnits = Money.parse(amount, token.decimals).units.toString();
       final prepared = await _api.prepareTransfer(
         credentialId: registered.credentialId,
         token: token.address,
         to: to,
-        amount: amount,
+        amount: baseUnits,
       );
 
       // The biometric prompt. The challenge is the userOpHash, and the account
@@ -206,9 +244,7 @@ class PasskeyController extends ChangeNotifier {
       await _api.submit(opId: prepared.opId, assertion: assertion);
       await _watch(prepared.opId);
     } catch (e) {
-      _set(
-        _state.copyWith(stage: PasskeyStage.idle, error: describeFailure(e)),
-      );
+      _set(_state.copyWith(stage: PasskeyStage.idle, error: describeAmount(e)));
     }
   }
 
@@ -256,3 +292,12 @@ class PasskeyController extends ChangeNotifier {
 /// else is a platform or parsing failure, which has its own translation.
 String describeFailure(Object error) =>
     error is ApiException ? error.message : describePasskeyFailure(error);
+
+/// Adds the one failure [describeFailure] cannot phrase for itself: a
+/// malformed amount typed by hand, thrown by [Money.parse] before anything
+/// ever reaches the network.
+String describeAmount(Object error) =>
+    error is FormatException
+        ? 'That amount doesn\'t look right — use plain digits and, if '
+            'needed, one decimal point.'
+        : describeFailure(error);

@@ -31,6 +31,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     // Ask up front, so an unsupported device says so before the user commits
     // to a flow that cannot finish.
     _controller.checkAvailability();
+    // Needs no auth, so this loads immediately — the amount field can show
+    // a real token symbol from the first frame, not a bare number.
+    _controller.loadConfig();
   }
 
   void _onChanged() => setState(() {});
@@ -87,9 +90,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               index: 1,
               title: 'Create a passkey',
               body:
-                  'A P-256 key is generated inside this device’s secure '
-                  'hardware. It never leaves, so there is nothing to write '
-                  'down and nothing to lose.',
+                  'A key is generated inside this device’s secure hardware. '
+                  'It never leaves, so there is nothing to write down and '
+                  'nothing to lose — unlike a seed phrase.',
               done: registered != null,
               action: FilledButton.icon(
                 onPressed:
@@ -133,10 +136,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               index: 2,
               title: 'Move a token with it',
               body:
-                  'The gateway builds and sponsors the operation; your '
-                  'fingerprint signs its userOpHash, which the account checks '
-                  'on-chain through the precompile at 0x0100. The account '
-                  'holds no MON and never needs any.',
+                  'Your fingerprint authorises it — no password, no seed '
+                  'phrase. The gateway covers the network fee, so the '
+                  'account never needs to hold any MON of its own.',
               done: state.op?.landed ?? false,
               action: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -157,10 +159,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   TextField(
                     controller: _amount,
                     enabled: account != null && !state.isBusy,
-                    keyboardType: TextInputType.number,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     style: tabularFigures,
-                    decoration: const InputDecoration(
-                      labelText: 'Amount, in the token’s base units',
+                    decoration: InputDecoration(
+                      labelText: 'Amount',
+                      suffixText: state.token?.symbol,
                       isDense: true,
                     ),
                   ),
@@ -235,7 +240,7 @@ class _NetworkBanner extends StatelessWidget {
             child: Text(
               isMain
                   ? 'Monad mainnet — real funds'
-                  : 'Monad testnet · rp ${config.relyingPartyId}',
+                  : 'Monad testnet — practice funds only',
               style: theme.textTheme.labelLarge?.copyWith(
                 color: isMain ? theme.colorScheme.onErrorContainer : null,
               ),
@@ -323,14 +328,18 @@ class _KeyCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _DataCard(
-      title: 'Account owner',
-      subtitle: 'These coordinates are what SokoniAccount stores on-chain.',
-      rows: {
-        'x': registered.publicKey.xHex,
-        'y': registered.publicKey.yHex,
-        'credential': registered.credentialId,
-      },
+    return _Disclosure(
+      summary: 'Passkey ready',
+      icon: Icons.check_circle_outline,
+      child: _DataCard(
+        title: 'Account owner',
+        subtitle: 'These coordinates are what SokoniAccount stores on-chain.',
+        rows: {
+          'x': registered.publicKey.xHex,
+          'y': registered.publicKey.yHex,
+          'credential': registered.credentialId,
+        },
+      ),
     );
   }
 }
@@ -341,16 +350,20 @@ class _AssertionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _DataCard(
-      title: 'Signature',
-      subtitle:
-          's is normalised to the low half — Monad’s precompile accepts '
-          'both forms, so the account rejects the malleable one.',
-      rows: {
-        'r': assertion.signature.rHex,
-        's': assertion.signature.sHex,
-        'challenge offset': '${assertion.challengeIndex}',
-      },
+    return _Disclosure(
+      summary: 'Signed',
+      icon: Icons.check_circle_outline,
+      child: _DataCard(
+        title: 'Signature',
+        subtitle:
+            's is normalised to the low half — Monad’s precompile accepts '
+            'both forms, so the account rejects the malleable one.',
+        rows: {
+          'r': assertion.signature.rHex,
+          's': assertion.signature.sHex,
+          'challenge offset': '${assertion.challengeIndex}',
+        },
+      ),
     );
   }
 }
@@ -365,9 +378,9 @@ class _AccountCard extends StatelessWidget {
       title: 'Your account',
       subtitle:
           account.deployed
-              ? 'Deployed. It needs no MON to use — the paymaster pays gas.'
-              : 'Not deployed yet, and it does not need to be. This address '
-                  'can receive funds now; your first transfer deploys it.',
+              ? 'Live on-chain. It never needs MON — Sokoni covers the fee.'
+              : 'This address is ready to receive funds now, even though '
+                  'nothing is on-chain yet. Your first transfer creates it.',
       rows: {'address': account.address},
     );
   }
@@ -397,6 +410,46 @@ class _OpCard extends StatelessWidget {
         if (op.blockNumber != null) 'block': '${op.blockNumber}',
         if (op.reason != null) 'reason': op.reason!,
       },
+    );
+  }
+}
+
+/// A card that starts collapsed behind one reassuring line, for detail that
+/// proves something to a reviewer but would only alarm a first-time user —
+/// raw key material, a signature's r/s. Tapping it open costs one gesture;
+/// leaving it open by default costs a calm first impression.
+class _Disclosure extends StatelessWidget {
+  const _Disclosure({
+    required this.summary,
+    required this.icon,
+    required this.child,
+  });
+
+  final String summary;
+  final IconData icon;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Theme(
+      // ExpansionTile's default divider reads as a stray line above the next
+      // card; suppress it rather than accept the mismatch.
+      data: theme.copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        tilePadding: EdgeInsets.zero,
+        childrenPadding: EdgeInsets.zero,
+        shape: const Border(),
+        leading: Icon(icon, size: 20, color: theme.colorScheme.primary),
+        title: Text(
+          summary,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        subtitle: const Text('Tap to see the proof'),
+        children: [child],
+      ),
     );
   }
 }
