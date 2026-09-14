@@ -75,14 +75,21 @@ type GasLimits struct {
 	MaxFee                 *big.Int
 }
 
+// DefaultGas values are measured, not guessed: run against real Monad testnet
+// through Pimlico on 2026-09-14 via cmd/onboard (see its longer note). The
+// bundler rejected 200_000 preVerificationGas (needed 1,113,093 for a
+// deploying account with a full WebAuthn signature) and 100 gwei maxFeePerGas
+// (needed >=152.5 gwei at the time). Gas price drifts with the market — these
+// are a safe floor with headroom, not permanent. Re-measure if
+// eth_sendUserOperation starts rejecting on either again.
 func DefaultGas() GasLimits {
 	return GasLimits{
 		Verification:           big.NewInt(600_000),
 		VerificationWithDeploy: big.NewInt(1_500_000),
 		Call:                   big.NewInt(400_000),
-		PreVerification:        big.NewInt(200_000),
-		MaxPriorityFee:         big.NewInt(1e9),
-		MaxFee:                 big.NewInt(100e9),
+		PreVerification:        big.NewInt(1_400_000),
+		MaxPriorityFee:         big.NewInt(3e9),
+		MaxFee:                 big.NewInt(200e9),
 	}
 }
 

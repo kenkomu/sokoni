@@ -109,7 +109,13 @@ func annotate(err *chain.RPCError) error {
 	var hint string
 	switch err.Code {
 	case -32500:
-		hint = "the account's own validation rejected it (bad signature, or the nonce is already used)"
+		// Narrower once: "bad signature, or nonce already used". Widened after
+		// a live rejection on Monad testnet used this same code for
+		// "preVerificationGas is not enough" — a gas-parameter problem, not a
+		// signature one. -32500 is the bundler's general validation-failure
+		// bucket; the message it comes with says which.
+		hint = "validation rejected it — read the message: a bad signature, a used nonce, " +
+			"and an insufficient gas parameter (preVerificationGas, most often) all surface here"
 	case -32501:
 		hint = "the paymaster rejected it — check the approval signature, its validity window, and the maxCost ceiling"
 	case -32502:

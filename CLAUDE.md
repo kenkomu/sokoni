@@ -207,12 +207,20 @@ refuse roughly one key in 256.
   (`reconciler`, `treasury`).
 - On mobile, only `features/onboarding` exists; `markets`, `trade`, `portfolio`,
   `settings` and the `domain/` layer are placeholders.
-- **Nothing here has ever run against a live chain.** The bundler, paymaster and
-  `cmd/onboard` harness are built and tested, but there is no Pimlico API key,
-  and neither the factory nor the paymaster is deployed on any network.
+- **Verified live on Monad testnet, 14 Sep 2026.** `cmd/onboard` deployed a
+  fresh `SokoniAccount` and moved a call through it with a passkey signature,
+  sponsored by a real `SokoniPaymaster` (`0xD3918f47F421aA0EC28b1f2d35Bc21F0Ca583287`,
+  chain 10143) through Pimlico's real bundler — the account held no MON the
+  whole time. See docs/adr/0008's addendum for the tx hash and what it caught:
+  two hardcoded gas constants were wrong (`preVerificationGas` ~5.5x too low,
+  `maxFeePerGas` stale) and an error hint was too narrow. Both are fixed now.
+  Still unverified live: the factory/paymaster are deployed only to testnet,
+  not mainnet, and no *device* has signed anything yet — `cmd/onboard` signs
+  with the Python test passkey, same as the Foundry tests.
 - **The phone ↔ gateway loop has only run against fakes.** Both sides are
   tested and the wire format is pinned from each, but no device has talked to
-  a running gateway yet.
+  a running gateway yet, and the gateway itself hasn't been pointed at the
+  now-deployed testnet paymaster/factory — only `cmd/onboard` has.
 - The gateway keeps prepared operations **in memory**: correct for one
   instance, wrong for two (prepare on one, submit to another → "no such
   operation"). Redis before a second instance.

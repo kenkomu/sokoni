@@ -124,3 +124,45 @@ paymaster should be accepted, subject to reputation — but "should per spec" an
 `SupportsConfiguredEntryPoint` at boot, then one sponsored operation on testnet.
 If a provider refuses third-party paymasters, that is a same-day swap to the
 fallback and no code changes.
+
+## Addendum, 14 Sep 2026 — verified live on Monad testnet
+
+Everything above was proven against a local Anvil chain when written. It has
+now run for real: Pimlico's testnet bundler, a `SokoniPaymaster` deployed at
+`0xD3918f47F421aA0EC28b1f2d35Bc21F0Ca583287` on chain 10143, and one sponsored
+operation that deployed a fresh `SokoniAccount` and landed successfully —
+[`0xd3971d64e761b158a8eca6e52833bdd943a1566f9e4406983fb8524c7cddcfbd`](https://testnet.monadexplorer.com/tx/0xd3971d64e761b158a8eca6e52833bdd943a1566f9e4406983fb8524c7cddcfbd).
+Confirmed independently on-chain, not just from the harness's own report: the
+account carries bytecode, `ownerAt(0)` returns the exact passkey coordinates,
+the `UserOperationEvent` log shows `success`, and the paymaster's EntryPoint
+deposit dropped by exactly the reported gas cost. The account never held MON.
+
+**Pimlico does accept a third-party paymaster.** The open risk ADR 8 flagged —
+"no provider's docs confirm a bundler accepts a paymaster we deployed
+ourselves" — is answered: it does, with no special registration step beyond
+the stake ERC-7562 already requires.
+
+**Two hardcoded gas defaults were wrong, found only by a live rejection:**
+
+- `preVerificationGas` at `200_000` was ~5.5x too low. Pimlico required
+  `1,113,093` for a deploying account whose calldata carries a full WebAuthn
+  signature (576 bytes) — bundler overhead and calldata cost that a fixed
+  guess had underestimated by a wide margin. Local guesses (from Anvil, or
+  from first principles) had no way to catch this; only a real bundler
+  simulating a real operation surfaces it.
+- `maxFeePerGas` at `100 gwei` was below Pimlico's live floor of `152.5 gwei`.
+  Unlike the constant above, this one is market data and will drift again —
+  it needed `pimlico_getUserOperationGasPrice` to find the current number, not
+  a fixed replacement.
+
+Both `cmd/onboard` and `gateway.DefaultGas()` now carry the measured values
+with headroom, and the constants' comments point back to this paragraph so
+the next person who has to raise them again knows why they're here and that
+they will need raising again.
+
+**`internal/bundler`'s `-32500` hint was too narrow**, and this is what
+caught it: the preVerificationGas rejection above came back as `-32500`, the
+same code the hint described as "bad signature, or the nonce is already
+used". `-32500` is the bundler's general validation-failure bucket; the
+attached message says which. The hint was widened to say so rather than
+naming one cause the whole bucket doesn't share.

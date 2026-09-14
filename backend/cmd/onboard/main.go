@@ -223,11 +223,24 @@ func run() error {
 		// per-operation estimate buys nothing at runtime — and estimating with a
 		// paymaster is circular anyway, since the estimate needs an approval
 		// that already commits to the gas being estimated.
+		//
+		// Defaults below are measured, not guessed: run against real Monad
+		// testnet through Pimlico on 2026-09-14. The first two attempts at
+		// 200_000/100 gwei were rejected outright —
+		//   preVerificationGas: bundler required 1,113,093 for a deploying
+		//     account with a full WebAuthn signature in calldata; 200_000 was
+		//     roughly 5.5x too low.
+		//   maxFeePerGas: bundler required >=152.5 gwei at the time; 100 gwei
+		//     was stale. Gas price is genuinely market data and will drift —
+		//     these floors are a safe starting point with headroom, not a
+		//     permanent constant. If eth_sendUserOperation starts rejecting on
+		//     either again, query pimlico_getUserOperationGasPrice (or the
+		//     equivalent on whichever bundler is configured) and re-set these.
 		VerificationGasLimit: envBig("VERIFICATION_GAS", 1_500_000),
 		CallGasLimit:         envBig("CALL_GAS", 400_000),
-		PreVerificationGas:   envBig("PRE_VERIFICATION_GAS", 200_000),
-		MaxPriorityFeePerGas: envBig("MAX_PRIORITY_FEE", 1e9),
-		MaxFeePerGas:         envBig("MAX_FEE", 100e9),
+		PreVerificationGas:   envBig("PRE_VERIFICATION_GAS", 1_400_000),
+		MaxPriorityFeePerGas: envBig("MAX_PRIORITY_FEE", 3e9),
+		MaxFeePerGas:         envBig("MAX_FEE", 200e9),
 	}
 	if !deployed {
 		if op.InitCode, err = account.InitCode(cfg.factory, cfg.rpIDHash, owners, new(big.Int).SetUint64(*salt)); err != nil {
