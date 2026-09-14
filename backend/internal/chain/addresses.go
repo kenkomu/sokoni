@@ -67,3 +67,29 @@ const (
 	// natively on-chain.
 	P256Precompile = "0x0000000000000000000000000000000000000100"
 )
+
+// Kuru. The on-chain CLOB ADR 1 builds around — this is "the matching core"
+// the rest of the system reads state from and never reimplements.
+//
+// Every address below carries real bytecode on Monad mainnet, checked
+// 2026-09-14 (block 104,763,787), EIP-55 checksummed. The two markets were
+// published at docs.kuru.io/contracts/Contract-addresses. That page was not
+// taken on faith: an independent keccak of `OrderCreated(uint40,address,
+// uint96,uint32,bool)` from src/venue/kuru.go matched a real event topic0
+// seen live on KuruMarketMONUSDC in the same block range — a coincidental
+// match on a 32-byte hash is not something that happens by chance, so this
+// is treated as confirming the whole event set the same page lists,
+// including Trade, not merely the one event actually observed.
+//
+// All four addresses are 141-byte proxies of the same shape (see
+// src/venue/kuru.go's note on the pattern) rather than four different full
+// contracts, which is consistent with one factory deploying lightweight
+// clones per market — the same shape SokoniAccountFactory uses for us.
+const (
+	KuruRouter        = "0xd651346d7c789536ebf06dc72aE3C8502cd695CC"
+	KuruMarginAccount = "0x2A68ba1833cDf93fa9Da1EEbd7F46242aD8E90c5"
+
+	// Markets. venue_ref in the `markets` table points at one of these.
+	KuruMarketMONAUSD = "0x131A2e70A5b31a517A74b8c567149bc294470Da9"
+	KuruMarketMONUSDC = "0x065C9d28E428A0db40191a54d33d5b7c71a9C394"
+)

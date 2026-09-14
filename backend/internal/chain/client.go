@@ -245,6 +245,86 @@ func (c *Client) Call(ctx context.Context, to string, data string) ([]byte, erro
 	})
 }
 
+// Log is one entry from eth_getLogs.
+type Log struct {
+	Address     string
+	Topics      []string
+	Data        []byte
+	BlockNumber uint64
+	TxHash      string
+	LogIndex    uint64
+	Removed     bool
+}
+
+type rawLog struct {
+	Address     string   `json:"address"`
+	Topics      []string `json:"topics"`
+	Data        string   `json:"data"`
+	BlockNumber string   `json:"blockNumber"`
+	TxHash      string   `json:"transactionHash"`
+	LogIndex    string   `json:"logIndex"`
+	Removed     bool     `json:"removed"`
+}
+
+// GetLogs fetches logs for [from, to] inclusive, at one address, optionally
+// narrowed to specific event topics (nil for "any event at this address").
+//
+// The public endpoint enforces a 100-block span per call — confirmed live,
+// not documented anywhere: a 101-block request returns JSON-RPC -32614,
+// "eth_getLogs is limited to a 100 range". Callers must window their own
+// requests to at most 100 blocks; this method does not chunk for them,
+// because chunking silently would hide that ceiling from a caller who needs
+// to know it.
+func (c *Client) GetLogs(ctx context.Context, address string, topics []string, from, to uint64) ([]Log, error) {
+	if to < from {
+		return nil, fmt.Errorf("getLogs: to %d is before from %d", to, from)
+	}
+	if to-from > 99 {
+		return nil, fmt.Errorf("getLogs: range %d..%d exceeds the 100-block ceiling the public endpoint enforces", from, to)
+	}
+
+	filter := map[string]any{
+		"address":   address,
+		"fromBlock": "0x" + strconv.FormatUint(from, 16),
+		"toBlock":   "0x" + strconv.FormatUint(to, 16),
+	}
+	if len(topics) > 0 {
+		filter["topics"] = topics
+	}
+
+	return Retry(ctx, "eth_getLogs", 6, func(ctx context.Context) ([]Log, error) {
+		out, err := c.call(ctx, []rpcRequest{{
+			JSONRPC: "2.0", ID: c.seq.Add(1), Method: "eth_getLogs", Params: []any{filter},
+		}})
+		if err != nil {
+			return nil, err
+		}
+		var raw []rawLog
+		if err := json.Unmarshal(out[0].Result, &raw); err != nil {
+			return nil, err
+		}
+		logs := make([]Log, 0, len(raw))
+		for _, r := range raw {
+			data, err := decodeHex(r.Data)
+			if err != nil {
+				return nil, fmt.Errorf("log data: %w", err)
+			}
+			logs = append(logs, Log{
+				Address:     r.Address,
+				Topics:      r.Topics,
+				Data:        data,
+				BlockNumber: parseHexU64(r.BlockNumber),
+				TxHash:      r.TxHash,
+				LogIndex:    parseHexU64(r.LogIndex),
+				Removed:     r.Removed,
+			})
+		}
+		return logs, nil
+	})
+}
+
+// Code returns the deployed bytecode at an address, empty if there is none.
+//
 // Code returns the deployed bytecode at an address, empty if there is none.
 //
 // The distinction matters for ERC-4337: an account that does not exist yet must
