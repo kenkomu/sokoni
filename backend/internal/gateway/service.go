@@ -31,6 +31,7 @@ import (
 
 	"github.com/kenkomu/sokoni/backend/internal/account"
 	"github.com/kenkomu/sokoni/backend/internal/bundler"
+	"github.com/kenkomu/sokoni/backend/internal/store"
 	"github.com/kenkomu/sokoni/backend/internal/userop"
 )
 
@@ -50,6 +51,18 @@ type Bundler interface {
 type Sponsor interface {
 	Approve(op *userop.UserOperation, validUntil, validAfter uint64, maxCost *big.Int) ([]byte, error)
 	MaxCost(op *userop.UserOperation) *big.Int
+}
+
+// MarketData is the slice of store.Store the gateway reads market data
+// through. *store.Store satisfies this structurally, and left nil (no
+// DATABASE_URL configured) the market-data endpoints answer with
+// KindUpstream rather than the gateway refusing to start — the same
+// no-DB laptop mode Accounts already falls back to.
+type MarketData interface {
+	ListMarkets(ctx context.Context) ([]store.Market, error)
+	MarketBySymbol(ctx context.Context, symbol string) (store.Market, bool, error)
+	Candles(ctx context.Context, symbol string, intervalS, limit int) ([]store.Candle, error)
+	RecentTrades(ctx context.Context, symbol string, limit int) ([]store.Trade, error)
 }
 
 // Token is an ERC-20 the paymaster will sponsor transfers of.
@@ -119,6 +132,7 @@ type Deps struct {
 	Sponsor  Sponsor
 	Accounts Accounts
 	Ops      PendingOps
+	Markets  MarketData
 	Log      *slog.Logger
 	Now      func() time.Time
 }
@@ -252,6 +266,52 @@ type StatusView struct {
 	TxHash      string `json:"txHash,omitempty"`
 	BlockNumber uint64 `json:"blockNumber,omitempty"`
 	Reason      string `json:"reason,omitempty"`
+}
+
+// candleIntervalS is the only candle bucket size store.ApplyBlocks populates
+// today (internal/store's candleIntervalS constant) — kept in sync by hand
+// since gateway does not import that private constant.
+const candleIntervalS = 60
+
+type MarketView struct {
+	Symbol     string `json:"symbol"`
+	BaseToken  string `json:"baseToken"`
+	QuoteToken string `json:"quoteToken"`
+	BaseDec    int32  `json:"baseDecimals"`
+	QuoteDec   int32  `json:"quoteDecimals"`
+	TickSize   string `json:"tickSize"`
+	MinQty     string `json:"minQty"`
+}
+
+type MarketsView struct {
+	Markets []MarketView `json:"markets"`
+}
+
+type CandleView struct {
+	BucketTS   time.Time `json:"bucketTs"`
+	Open       string    `json:"open"`
+	High       string    `json:"high"`
+	Low        string    `json:"low"`
+	Close      string    `json:"close"`
+	Volume     string    `json:"volume"`
+	TradeCount int       `json:"tradeCount"`
+}
+
+type CandlesView struct {
+	Candles []CandleView `json:"candles"`
+}
+
+type TradeView struct {
+	FillID      int64  `json:"fillId"`
+	Side        string `json:"side"`
+	Px          string `json:"px"`
+	Qty         string `json:"qty"`
+	BlockNumber int64  `json:"blockNumber"`
+	TxHash      string `json:"txHash"`
+}
+
+type TradesView struct {
+	Trades []TradeView `json:"trades"`
 }
 
 // ------------------------------------------------------------------ config
@@ -664,4 +724,101 @@ func newOpID() (string, error) {
 		return "", err
 	}
 	return "op_" + hex.EncodeToString(b[:]), nil
+}
+
+// ------------------------------------------------------------------ market data
+
+// noMarketData is the error every market-data method returns when Deps.Markets
+// is nil — no DATABASE_URL configured, the same laptop-friendly fallback
+// Accounts already has, except there is no in-memory equivalent for read
+// queries over an indexer-populated table, so this is a hard 502 rather than
+// a degraded mode.
+func (s *Service) noMarketData() error {
+	return fail(KindUpstream, "no_market_data", "market data is not available: this gateway has no database configured", nil)
+}
+
+func (s *Service) ListMarkets(ctx context.Context) (*MarketsView, error) {
+	if s.d.Markets == nil {
+		return nil, s.noMarketData()
+	}
+	markets, err := s.d.Markets.ListMarkets(ctx)
+	if err != nil {
+		return nil, fail(KindUpstream, "store", "could not read markets", err)
+	}
+	out := &MarketsView{Markets: make([]MarketView, 0, len(markets))}
+	for _, m := range markets {
+		out.Markets = append(out.Markets, MarketView{
+			Symbol:     m.Symbol,
+			BaseToken:  common.BytesToAddress(m.BaseToken).Hex(),
+			QuoteToken: common.BytesToAddress(m.QuoteToken).Hex(),
+			BaseDec:    m.BaseDec,
+			QuoteDec:   m.QuoteDec,
+			TickSize:   m.TickSize,
+			MinQty:     m.MinQty,
+		})
+	}
+	return out, nil
+}
+
+func (s *Service) Candles(ctx context.Context, symbol string, intervalS, limit int) (*CandlesView, error) {
+	if s.d.Markets == nil {
+		return nil, s.noMarketData()
+	}
+	if _, found, err := s.marketBySymbol(ctx, symbol); err != nil {
+		return nil, err
+	} else if !found {
+		return nil, fail(KindNotFound, "market_not_found", "no such market", nil)
+	}
+	// Only interval_s=60 is ever populated (store's candleIntervalS) — reject
+	// anything else rather than silently returning the wrong bucket size,
+	// which a chart would render as if it were what was asked for.
+	if intervalS != candleIntervalS {
+		return nil, fail(KindInvalid, "unsupported_interval",
+			fmt.Sprintf("only %ds candles are available", candleIntervalS), nil)
+	}
+
+	candles, err := s.d.Markets.Candles(ctx, symbol, intervalS, limit)
+	if err != nil {
+		return nil, fail(KindUpstream, "store", "could not read candles", err)
+	}
+	out := &CandlesView{Candles: make([]CandleView, 0, len(candles))}
+	for _, c := range candles {
+		out.Candles = append(out.Candles, CandleView{
+			BucketTS: c.BucketTS.UTC(), Open: c.Open, High: c.High, Low: c.Low,
+			Close: c.Close, Volume: c.Volume, TradeCount: c.TradeCount,
+		})
+	}
+	return out, nil
+}
+
+func (s *Service) RecentTrades(ctx context.Context, symbol string, limit int) (*TradesView, error) {
+	if s.d.Markets == nil {
+		return nil, s.noMarketData()
+	}
+	if _, found, err := s.marketBySymbol(ctx, symbol); err != nil {
+		return nil, err
+	} else if !found {
+		return nil, fail(KindNotFound, "market_not_found", "no such market", nil)
+	}
+
+	trades, err := s.d.Markets.RecentTrades(ctx, symbol, limit)
+	if err != nil {
+		return nil, fail(KindUpstream, "store", "could not read trades", err)
+	}
+	out := &TradesView{Trades: make([]TradeView, 0, len(trades))}
+	for _, t := range trades {
+		out.Trades = append(out.Trades, TradeView{
+			FillID: t.FillID, Side: t.Side, Px: t.Px, Qty: t.Qty,
+			BlockNumber: t.BlockNumber, TxHash: "0x" + hex.EncodeToString(t.TxHash),
+		})
+	}
+	return out, nil
+}
+
+func (s *Service) marketBySymbol(ctx context.Context, symbol string) (store.Market, bool, error) {
+	m, found, err := s.d.Markets.MarketBySymbol(ctx, symbol)
+	if err != nil {
+		return store.Market{}, false, fail(KindUpstream, "store", "could not read markets", err)
+	}
+	return m, found, nil
 }

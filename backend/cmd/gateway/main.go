@@ -185,7 +185,7 @@ func run(log *slog.Logger) error {
 	log.Info("preflight passed", "chain", cfg.ChainID, "entryPoint", cfg.EntryPoint,
 		"paymaster", w.paymaster, "signer", sponsor.SignerAddress(), "tokens", len(cfg.Tokens))
 
-	accounts, closeDB, err := openAccounts(ctx, w, log)
+	accounts, db, closeDB, err := openAccounts(ctx, w, log)
 	if err != nil {
 		return err
 	}
@@ -197,18 +197,33 @@ func run(log *slog.Logger) error {
 	}
 	defer closeOps()
 
+	// db is nil in the same no-DATABASE_URL laptop mode that leaves accounts
+	// in memory -- Markets stays nil too, and the market-data endpoints/hub
+	// degrade to a 503 rather than the gateway refusing to start.
+	var markets gateway.MarketData
+	if db != nil {
+		markets = db
+	}
+
 	svc := gateway.NewService(cfg, gateway.Deps{
 		Chain:    rpc,
 		Bundler:  bnd,
 		Sponsor:  sponsor,
 		Accounts: accounts,
 		Ops:      ops,
+		Markets:  markets,
 		Log:      log,
 	})
 
+	var hub *gateway.Hub
+	if markets != nil {
+		hub = gateway.NewHub(markets, log)
+		go hub.Run(ctx, 750*time.Millisecond)
+	}
+
 	srv := &http.Server{
 		Addr:              w.addr,
-		Handler:           gateway.NewHandler(svc, log),
+		Handler:           gateway.NewHandler(svc, hub, log),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -262,19 +277,23 @@ func openOps(w wiring, log *slog.Logger) (gateway.PendingOps, func(), error) {
 // openAccounts uses Postgres when DATABASE_URL is set, and memory otherwise.
 // Memory is fine for a laptop and wrong for anything else: a restart forgets
 // every registration, and the phone has to register again.
-func openAccounts(ctx context.Context, w wiring, log *slog.Logger) (gateway.Accounts, func(), error) {
+//
+// The returned *store.Store is nil in memory mode and non-nil otherwise --
+// it backs Deps.Markets too (run's caller), so market data and accounts
+// share one connection rather than opening a second pool.
+func openAccounts(ctx context.Context, w wiring, log *slog.Logger) (gateway.Accounts, *store.Store, func(), error) {
 	if w.dsn == "" {
 		log.Warn("DATABASE_URL not set; accounts are in memory and a restart forgets them")
-		return gateway.NewMemoryAccounts(), func() {}, nil
+		return gateway.NewMemoryAccounts(), nil, func() {}, nil
 	}
 	db, err := store.Open(ctx, w.dsn)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open database: %w", err)
+		return nil, nil, nil, fmt.Errorf("open database: %w", err)
 	}
 	gen, err := id.NewGenerator(w.nodeID)
 	if err != nil {
 		db.Close()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return gateway.NewPostgresAccounts(db.Pool(), gen), db.Close, nil
+	return gateway.NewPostgresAccounts(db.Pool(), gen), db, db.Close, nil
 }

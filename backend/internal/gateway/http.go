@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
+	"strconv"
 
 	"github.com/ethereum/go-ethereum/common"
 
@@ -19,16 +20,24 @@ const maxBody = 64 << 10
 // NewHandler routes the gateway's HTTP API.
 //
 //	GET  /healthz
-//	GET  /v1/config               chain, EntryPoint, sponsored tokens
-//	POST /v1/accounts             register a passkey, learn its account address
-//	POST /v1/ops                  prepare an operation, receive its challenge
-//	POST /v1/ops/{id}/submit      return the signed assertion
-//	GET  /v1/ops/{id}             poll for the outcome
-func NewHandler(svc *Service, log *slog.Logger) http.Handler {
+//	GET  /v1/config                        chain, EntryPoint, sponsored tokens
+//	POST /v1/accounts                      register a passkey, learn its account address
+//	POST /v1/ops                           prepare an operation, receive its challenge
+//	POST /v1/ops/{id}/submit               return the signed assertion
+//	GET  /v1/ops/{id}                      poll for the outcome
+//	GET  /v1/markets                       enabled markets
+//	GET  /v1/markets/{symbol}/candles      candle history (interval query param, seconds)
+//	GET  /v1/markets/{symbol}/trades       recent market-wide trades (limit query param)
+//	GET  /v1/stream                        WebSocket: {"op":"sub","ch":[...]} subscribes
+//
+// hub may be nil (no DATABASE_URL configured, same as svc.d.Markets being nil)
+// — /v1/stream then refuses the upgrade with a 503 rather than accepting
+// connections it can never publish anything to.
+func NewHandler(svc *Service, hub *Hub, log *slog.Logger) http.Handler {
 	if log == nil {
 		log = slog.Default()
 	}
-	h := &handler{svc: svc, log: log}
+	h := &handler{svc: svc, hub: hub, log: log}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -38,11 +47,16 @@ func NewHandler(svc *Service, log *slog.Logger) http.Handler {
 	mux.HandleFunc("POST /v1/ops", h.prepare)
 	mux.HandleFunc("POST /v1/ops/{id}/submit", h.submit)
 	mux.HandleFunc("GET /v1/ops/{id}", h.status)
+	mux.HandleFunc("GET /v1/markets", h.markets)
+	mux.HandleFunc("GET /v1/markets/{symbol}/candles", h.candles)
+	mux.HandleFunc("GET /v1/markets/{symbol}/trades", h.trades)
+	mux.HandleFunc("GET /v1/stream", h.stream)
 	return mux
 }
 
 type handler struct {
 	svc *Service
+	hub *Hub
 	log *slog.Logger
 }
 
@@ -125,6 +139,63 @@ func (h *handler) submit(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) status(w http.ResponseWriter, r *http.Request) {
 	view, err := h.svc.Status(r.Context(), r.PathValue("id"))
+	h.respond(w, http.StatusOK, view, err)
+}
+
+func (h *handler) markets(w http.ResponseWriter, r *http.Request) {
+	view, err := h.svc.ListMarkets(r.Context())
+	h.respond(w, http.StatusOK, view, err)
+}
+
+// defaultLimit/maxLimit bound every list query; parsing and clamping happens
+// here, in the request-parsing layer, not in the Service, which takes only
+// already-validated ints.
+const (
+	defaultLimit = 100
+	maxLimit     = 500
+)
+
+func parseLimit(r *http.Request) (int, error) {
+	s := r.URL.Query().Get("limit")
+	if s == "" {
+		return defaultLimit, nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n <= 0 {
+		return 0, fail(KindInvalid, "bad_query", "limit must be a positive integer", nil)
+	}
+	if n > maxLimit {
+		n = maxLimit
+	}
+	return n, nil
+}
+
+func (h *handler) candles(w http.ResponseWriter, r *http.Request) {
+	interval := candleIntervalS
+	if s := r.URL.Query().Get("interval"); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil || n <= 0 {
+			h.fail(w, fail(KindInvalid, "bad_query", "interval must be a positive integer, in seconds", nil))
+			return
+		}
+		interval = n
+	}
+	limit, err := parseLimit(r)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	view, err := h.svc.Candles(r.Context(), r.PathValue("symbol"), interval, limit)
+	h.respond(w, http.StatusOK, view, err)
+}
+
+func (h *handler) trades(w http.ResponseWriter, r *http.Request) {
+	limit, err := parseLimit(r)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	view, err := h.svc.RecentTrades(r.Context(), r.PathValue("symbol"), limit)
 	h.respond(w, http.StatusOK, view, err)
 }
 

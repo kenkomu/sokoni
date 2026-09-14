@@ -24,6 +24,7 @@ import (
 	"github.com/kenkomu/sokoni/backend/internal/account"
 	"github.com/kenkomu/sokoni/backend/internal/bundler"
 	"github.com/kenkomu/sokoni/backend/internal/paymaster"
+	"github.com/kenkomu/sokoni/backend/internal/store"
 	"github.com/kenkomu/sokoni/backend/internal/userop"
 )
 
@@ -182,6 +183,59 @@ type rig struct {
 	chain   *fakeChain
 	bundler *fakeBundler
 	clock   *clock
+	markets *fakeMarketData
+	hub     *Hub
+}
+
+// fakeMarketData is a MarketData a test can seed directly, so gateway tests
+// never need a real Postgres -- that coverage lives in
+// internal/store/reads_test.go against the real schema.
+type fakeMarketData struct {
+	mu      sync.Mutex
+	markets []store.Market
+	candles map[string][]store.Candle // key: symbol
+	trades  map[string][]store.Trade  // key: symbol
+}
+
+func newFakeMarketData() *fakeMarketData {
+	return &fakeMarketData{candles: map[string][]store.Candle{}, trades: map[string][]store.Trade{}}
+}
+
+func (f *fakeMarketData) ListMarkets(context.Context) ([]store.Market, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]store.Market{}, f.markets...), nil
+}
+
+func (f *fakeMarketData) MarketBySymbol(_ context.Context, symbol string) (store.Market, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, m := range f.markets {
+		if m.Symbol == symbol {
+			return m, true, nil
+		}
+	}
+	return store.Market{}, false, nil
+}
+
+func (f *fakeMarketData) Candles(_ context.Context, symbol string, _, limit int) ([]store.Candle, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	rows := f.candles[symbol]
+	if len(rows) > limit {
+		rows = rows[len(rows)-limit:]
+	}
+	return append([]store.Candle{}, rows...), nil
+}
+
+func (f *fakeMarketData) RecentTrades(_ context.Context, symbol string, limit int) ([]store.Trade, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	rows := f.trades[symbol]
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return append([]store.Trade{}, rows...), nil
 }
 
 func quietLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -201,6 +255,7 @@ func newRig(t *testing.T) *rig {
 	ch := &fakeChain{nonce: big.NewInt(0), balance: big.NewInt(1_000_000), code: map[common.Address][]byte{}}
 	b := &fakeBundler{}
 	c := &clock{t: time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)}
+	md := newFakeMarketData()
 	svc := NewService(Config{
 		EntryPoint: testEntryPoint,
 		Factory:    testFactory,
@@ -215,10 +270,12 @@ func newRig(t *testing.T) *rig {
 		Sponsor:  sp,
 		Accounts: NewMemoryAccounts(),
 		Ops:      NewMemoryOps(time.Hour, c.Now),
+		Markets:  md,
 		Log:      quietLog(),
 		Now:      c.Now,
 	})
-	return &rig{svc: svc, chain: ch, bundler: b, clock: c}
+	hub := NewHub(md, quietLog())
+	return &rig{svc: svc, chain: ch, bundler: b, clock: c, markets: md, hub: hub}
 }
 
 func (r *rig) pending(t *testing.T, id string) Pending {

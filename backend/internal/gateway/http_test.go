@@ -9,14 +9,17 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+
+	"github.com/kenkomu/sokoni/backend/internal/store"
 )
 
 func newServer(t *testing.T) (*rig, *httptest.Server) {
 	t.Helper()
 	r := newRig(t)
-	srv := httptest.NewServer(NewHandler(r.svc, quietLog()))
+	srv := httptest.NewServer(NewHandler(r.svc, r.hub, quietLog()))
 	t.Cleanup(srv.Close)
 	return r, srv
 }
@@ -175,6 +178,83 @@ func TestConfigListsSponsoredTokens(t *testing.T) {
 	tokens, _ := body["sponsoredTokens"].([]any)
 	if len(tokens) != 1 || tokens[0].(map[string]any)["symbol"] != "TST" {
 		t.Errorf("sponsoredTokens = %v", tokens)
+	}
+}
+
+func TestMarketsListsEnabledMarkets(t *testing.T) {
+	r, srv := newServer(t)
+	r.markets.markets = []store.Market{
+		{Symbol: "MON-USDC", BaseToken: make([]byte, 20), QuoteToken: testToken.Bytes(),
+			BaseDec: 18, QuoteDec: 6, Venue: "kuru", TickSize: "0.000001000000000000", MinQty: "0.000002000000000000"},
+	}
+
+	status, body := do(t, "GET", srv.URL+"/v1/markets", nil)
+	if status != http.StatusOK {
+		t.Fatalf("status %d", status)
+	}
+	markets, _ := body["markets"].([]any)
+	if len(markets) != 1 {
+		t.Fatalf("markets = %v, want 1", markets)
+	}
+	m := markets[0].(map[string]any)
+	if m["symbol"] != "MON-USDC" || m["tickSize"] != "0.000001000000000000" {
+		t.Errorf("market = %v", m)
+	}
+}
+
+func TestCandlesUnknownMarket404s(t *testing.T) {
+	_, srv := newServer(t)
+	status, body := do(t, "GET", srv.URL+"/v1/markets/NOPE/candles", nil)
+	if status != http.StatusNotFound {
+		t.Fatalf("status %d, want 404: %v", status, body)
+	}
+}
+
+func TestCandlesRejectsUnsupportedInterval(t *testing.T) {
+	r, srv := newServer(t)
+	r.markets.markets = []store.Market{{Symbol: "MON-USDC"}}
+
+	status, body := do(t, "GET", srv.URL+"/v1/markets/MON-USDC/candles?interval=300", nil)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400: %v", status, body)
+	}
+}
+
+func TestCandlesReturnsSeededRows(t *testing.T) {
+	r, srv := newServer(t)
+	r.markets.markets = []store.Market{{Symbol: "MON-USDC"}}
+	r.markets.candles["MON-USDC"] = []store.Candle{
+		{BucketTS: time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC), Open: "1", High: "1", Low: "1", Close: "1", Volume: "1", TradeCount: 1},
+	}
+
+	status, body := do(t, "GET", srv.URL+"/v1/markets/MON-USDC/candles", nil)
+	if status != http.StatusOK {
+		t.Fatalf("status %d", status)
+	}
+	candles, _ := body["candles"].([]any)
+	if len(candles) != 1 {
+		t.Fatalf("candles = %v, want 1", candles)
+	}
+}
+
+func TestTradesReturnsMostRecentFirst(t *testing.T) {
+	r, srv := newServer(t)
+	r.markets.markets = []store.Market{{Symbol: "MON-USDC"}}
+	r.markets.trades["MON-USDC"] = []store.Trade{
+		{FillID: 2, Side: "buy", Px: "1", Qty: "1", BlockNumber: 200, TxHash: make([]byte, 32)},
+		{FillID: 1, Side: "sell", Px: "1", Qty: "1", BlockNumber: 100, TxHash: make([]byte, 32)},
+	}
+
+	status, body := do(t, "GET", srv.URL+"/v1/markets/MON-USDC/trades?limit=1", nil)
+	if status != http.StatusOK {
+		t.Fatalf("status %d", status)
+	}
+	trades, _ := body["trades"].([]any)
+	if len(trades) != 1 {
+		t.Fatalf("trades = %v, want 1", trades)
+	}
+	if trades[0].(map[string]any)["fillId"] != float64(2) {
+		t.Errorf("trades[0] = %v, want fillId 2 (most recent)", trades[0])
 	}
 }
 
