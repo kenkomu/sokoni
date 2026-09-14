@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -97,7 +98,7 @@ func (s *Store) ApplyBlocks(ctx context.Context, consumer string, headers []chai
 	defer tx.Rollback(ctx)
 
 	if len(headers) > 0 && s.venue != nil {
-		if err := s.applyTrades(ctx, tx, headers[0].Number, headers[len(headers)-1].Number); err != nil {
+		if err := s.applyTrades(ctx, tx, headers); err != nil {
 			return fmt.Errorf("apply trades: %w", err)
 		}
 	}
@@ -124,18 +125,34 @@ func (s *Store) ApplyBlocks(ctx context.Context, consumer string, headers []chai
 type enabledMarket struct {
 	symbol         string
 	venueRef       []byte
+	baseToken      []byte
+	quoteToken     []byte
 	baseDec        int32
 	pricePrecision int64
 }
 
+// candleIntervalS is the one bucket size populated for now. interval_s is a
+// column, not a constant, precisely so a second interval is a new row shape,
+// not a schema change -- this just doesn't need a second interval yet.
+const candleIntervalS = 60
+
 // applyTrades pulls one eth_getLogs window per enabled market (not per
-// block) and decodes every Trade into `fills`. Kuru's own tape, not ours:
-// a fill is inserted for every match on the book, and account_id is filled
-// in only when a side of it happens to be one of our accounts -- see
-// migrations/0002_fills_market_tape.sql for why that had to become nullable.
-func (s *Store) applyTrades(ctx context.Context, tx pgx.Tx, from, to uint64) error {
+// block) and decodes every Trade into `fills`, `ledger_entries` and
+// `candles`. Kuru's own tape, not ours: a fill is inserted for every match
+// on the book, and account_id/ledger_entries are filled in only when a side
+// of it happens to be one of our accounts -- see
+// migrations/0002_fills_market_tape.sql for why account_id had to become
+// nullable. Candles aggregate every fill regardless of account match, since
+// a candle is a market-wide statistic, not a per-user one.
+func (s *Store) applyTrades(ctx context.Context, tx pgx.Tx, headers []chain.BlockHeader) error {
+	from, to := headers[0].Number, headers[len(headers)-1].Number
+	blockTime := make(map[uint64]time.Time, len(headers))
+	for _, h := range headers {
+		blockTime[h.Number] = time.Unix(int64(h.Timestamp), 0).UTC()
+	}
+
 	rows, err := tx.Query(ctx,
-		`select symbol, venue_ref, base_dec, price_precision from markets
+		`select symbol, venue_ref, base_token, quote_token, base_dec, price_precision from markets
 		 where enabled and venue_ref is not null`)
 	if err != nil {
 		return fmt.Errorf("load markets: %w", err)
@@ -143,7 +160,7 @@ func (s *Store) applyTrades(ctx context.Context, tx pgx.Tx, from, to uint64) err
 	var markets []enabledMarket
 	for rows.Next() {
 		var m enabledMarket
-		if err := rows.Scan(&m.symbol, &m.venueRef, &m.baseDec, &m.pricePrecision); err != nil {
+		if err := rows.Scan(&m.symbol, &m.venueRef, &m.baseToken, &m.quoteToken, &m.baseDec, &m.pricePrecision); err != nil {
 			rows.Close()
 			return fmt.Errorf("scan market: %w", err)
 		}
@@ -171,15 +188,21 @@ func (s *Store) applyTrades(ctx context.Context, tx pgx.Tx, from, to uint64) err
 			if err != nil {
 				return fmt.Errorf("decode trade %s#%d: %w", lg.TxHash, lg.LogIndex, err)
 			}
-			if err := s.insertFill(ctx, tx, m, t); err != nil {
-				return fmt.Errorf("insert fill %s#%d: %w", lg.TxHash, lg.LogIndex, err)
+			bt, ok := blockTime[t.BlockNumber]
+			if !ok {
+				return fmt.Errorf("trade %s#%d references block %d, outside this window's headers",
+					lg.TxHash, lg.LogIndex, t.BlockNumber)
+			}
+			if err := s.applyTrade(ctx, tx, m, t, bt); err != nil {
+				return fmt.Errorf("apply trade %s#%d: %w", lg.TxHash, lg.LogIndex, err)
 			}
 		}
 	}
 	return nil
 }
 
-// insertFill scales one Trade into fills' px/qty and writes it. Scaling is
+// applyTrade scales one Trade, writes its fill, and -- only for a new fill,
+// never a replayed one -- its ledger legs and candle bucket. Scaling is
 // inferred, not vendor-documented -- see internal/venue's package doc for
 // the live OrderCreated log this was checked against (its `size` field was
 // an exact multiple of sizePrecision and its `price` field an exact
@@ -187,11 +210,15 @@ func (s *Store) applyTrades(ctx context.Context, tx pgx.Tx, from, to uint64) err
 // pricePrecision range with no further rescaling needed), and the same
 // caveat that applies to Trade's field layout applies here: treat it as
 // provisional until a real Trade log is captured and checked the same way.
-func (s *Store) insertFill(ctx context.Context, tx pgx.Tx, m enabledMarket, t *venue.Trade) error {
+func (s *Store) applyTrade(ctx context.Context, tx pgx.Tx, m enabledMarket, t *venue.Trade, blockTime time.Time) error {
 	px := new(big.Rat).SetFrac(new(big.Int).SetInt64(int64(t.Price)), big.NewInt(m.pricePrecision))
 	baseUnit := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(m.baseDec)), nil)
 	qty := new(big.Rat).SetFrac(t.FilledSize, baseUnit)
 
+	// IsBuy is the taker's direction. fills.side records the taker's side
+	// regardless of which party (if either) turned out to be ours -- a single
+	// column cannot hold both counterparties' perspectives, and the taker is
+	// the conventional "aggressor" side a trade tape reports.
 	side := "sell"
 	if t.IsBuy {
 		side = "buy"
@@ -206,11 +233,13 @@ func (s *Store) insertFill(ctx context.Context, tx pgx.Tx, m enabledMarket, t *v
 	// accounts; taker takes priority on the rare chance a self-trade matches
 	// both (there is then no unique "the" account for one fill row anyway).
 	var accountID *int64
-	for _, addr := range [][]byte{t.Taker.Bytes(), t.Maker.Bytes()} {
+	var matchedTaker bool
+	for i, addr := range [][]byte{t.Taker.Bytes(), t.Maker.Bytes()} {
 		var id int64
 		err := tx.QueryRow(ctx, `select account_id from accounts where smart_account = $1`, addr).Scan(&id)
 		if err == nil {
 			accountID = &id
+			matchedTaker = i == 0
 			break
 		}
 		if err != pgx.ErrNoRows {
@@ -218,12 +247,118 @@ func (s *Store) insertFill(ctx context.Context, tx pgx.Tx, m enabledMarket, t *v
 		}
 	}
 
-	_, err = tx.Exec(ctx, `
+	var fillID int64
+	err = tx.QueryRow(ctx, `
 		insert into fills (account_id, market, side, px, qty, block_number, tx_hash, log_index, maker_address, taker_address)
 		values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		on conflict (tx_hash, log_index) do nothing`,
+		on conflict (tx_hash, log_index) do nothing
+		returning fill_id`,
 		accountID, m.symbol, side, px.FloatString(18), qty.FloatString(18),
-		int64(t.BlockNumber), txHash, int32(t.LogIndex), t.Maker.Bytes(), t.Taker.Bytes())
+		int64(t.BlockNumber), txHash, int32(t.LogIndex), t.Maker.Bytes(), t.Taker.Bytes()).Scan(&fillID)
+	if err == pgx.ErrNoRows {
+		// Already recorded by an earlier run over this same window -- a
+		// reprocess after a crash, not new information. Writing the ledger
+		// legs or candle bucket again would double-count both.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("insert fill: %w", err)
+	}
+
+	if accountID != nil {
+		// The matched account's own side, which is the taker's side only
+		// when the match was on the taker -- a maker match is the opposite
+		// of IsBuy, since IsBuy describes the taker's direction.
+		ourBuy := t.IsBuy
+		if !matchedTaker {
+			ourBuy = !t.IsBuy
+		}
+		if err := s.writeLedgerLegs(ctx, tx, fillID, *accountID, m, px, qty, ourBuy, txHash, int32(t.LogIndex)); err != nil {
+			return fmt.Errorf("ledger legs: %w", err)
+		}
+	}
+
+	if err := s.upsertCandle(ctx, tx, m.symbol, px, qty, blockTime); err != nil {
+		return fmt.Errorf("upsert candle: %w", err)
+	}
+	return nil
+}
+
+// writeLedgerLegs records the two asset movements one of our accounts made
+// in a trade: base and quote, opposite signs, sharing txn_id=fillID so the
+// pair is traceable back to the fill that caused it. This is not the full
+// double-entry the ledger_entries doc comment describes (that needs a
+// counterparty leg too, and the counterparty here is the venue or another
+// trader, neither of which is one of our accounts) -- it is only our own
+// account's balance movement, which is what reconciliation actually checks
+// against the chain.
+func (s *Store) writeLedgerLegs(ctx context.Context, tx pgx.Tx, fillID, accountID int64, m enabledMarket, px, qty *big.Rat, ourBuy bool, txHash []byte, logIndex int32) error {
+	baseDelta := new(big.Rat).Set(qty)
+	quoteDelta := new(big.Rat).Mul(px, qty)
+	if !ourBuy {
+		baseDelta.Neg(baseDelta)
+	} else {
+		quoteDelta.Neg(quoteDelta)
+	}
+
+	legs := []struct {
+		asset string
+		delta *big.Rat
+	}{
+		{assetSymbol(m.baseToken), baseDelta},
+		{assetSymbol(m.quoteToken), quoteDelta},
+	}
+	for _, leg := range legs {
+		if _, err := tx.Exec(ctx, `
+			insert into ledger_entries (txn_id, account_id, asset, delta, reason, tx_hash, log_index)
+			values ($1, $2, $3, $4, 'trade', $5, $6)
+			on conflict (tx_hash, log_index, account_id, asset) do nothing`,
+			fillID, accountID, leg.asset, leg.delta.FloatString(18), txHash, logIndex); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// assetSymbol maps a market's token address to the label ledger_entries and
+// reconciliation_runs use. Kuru's own convention for native MON is the zero
+// address (confirmed live via getMarketParams(), see addresses.go); every
+// other address here is one already verified in internal/chain/addresses.go.
+func assetSymbol(addr []byte) string {
+	zero := make([]byte, 20)
+	if string(addr) == string(zero) {
+		return "MON"
+	}
+	hexAddr := "0x" + hex.EncodeToString(addr)
+	for _, tok := range []chain.Token{chain.AUSD, chain.USDC, chain.WMON} {
+		if strings.EqualFold(tok.Address, hexAddr) {
+			return tok.Symbol
+		}
+	}
+	return hexAddr
+}
+
+// upsertCandle folds one trade into its candleIntervalS bucket. open is set
+// only by the first insert into a bucket (ON CONFLICT never touches it);
+// high/low/close/volume/trade_count fold in on every trade after, which is
+// correct as long as trades are applied in chronological order -- guaranteed
+// both within one window (the node returns logs for one address in log
+// order) and across windows (the indexer applies windows strictly in
+// sequence).
+func (s *Store) upsertCandle(ctx context.Context, tx pgx.Tx, market string, px, qty *big.Rat, blockTime time.Time) error {
+	bucket := blockTime.Truncate(candleIntervalS * time.Second)
+	pxStr := px.FloatString(18)
+	qtyStr := qty.FloatString(18)
+	_, err := tx.Exec(ctx, `
+		insert into candles (market, interval_s, bucket_ts, open_px, high_px, low_px, close_px, volume, trade_count)
+		values ($1, $2, $3, $4, $4, $4, $4, $5, 1)
+		on conflict (market, interval_s, bucket_ts) do update
+		  set high_px     = greatest(candles.high_px, excluded.high_px),
+		      low_px      = least(candles.low_px, excluded.low_px),
+		      close_px    = excluded.close_px,
+		      volume      = candles.volume + excluded.volume,
+		      trade_count = candles.trade_count + 1`,
+		market, candleIntervalS, bucket, pxStr, qtyStr)
 	return err
 }
 

@@ -14,7 +14,7 @@ must not be broken casually.
 
 ```
 make up        # postgres :5433, redis :6380
-make migrate   # apply backend/migrations/0001_init.sql
+make migrate   # apply every backend/migrations/*.sql, in order
 make go-check  # gofmt gate + vet + race tests
 make dart-check
 make sol-check
@@ -216,8 +216,23 @@ refuse roughly one key in 256.
   `internal/venue/kuru_test.go` (its `size` and `price` fields were exact
   multiples of `sizePrecision`/`tickSize` and needed no further rescaling) —
   `Trade`'s own field layout is still the same unconfirmed-by-a-live-log gap
-  `internal/venue`'s package doc already flags. `ledger_entries` and
-  `candles` are still not populated from fills — next slice of the same TODO.
+  `internal/venue`'s package doc already flags.
+  **`ledger_entries` and `candles` are now populated too**, in the same
+  transaction as the fill. `ledger_entries` gets two legs (base, quote,
+  opposite signs) only for the account that matched -- this is *not* the
+  full double-entry the table's own doc comment describes (that needs a
+  counterparty leg, and the counterparty here is the venue or another
+  trader, neither of which is one of our accounts); it is our account's own
+  balance movement, which is what reconciliation actually checks against the
+  chain. `candles` aggregates every fill regardless of account match (a
+  candle is market-wide, not per-user), one interval only for now — 60s,
+  see `candleIntervalS` — with `open` set only on a bucket's first trade and
+  `high`/`low`/`close`/`volume`/`trade_count` folded in after, correct only
+  because trades are applied in strict chronological order (log order within
+  a window, window order across the indexer's run). A replayed window's
+  already-recorded fill returns before touching either table, so neither
+  double-counts on reprocess — proved by
+  `TestApplyBlocksIsIdempotentOnReplay`.
 - Five of fifteen `internal` packages are `.gitkeep` — `auth`, `marketdata`,
   `orders`, `treasury`, `observability` — plus two of five `cmd` entrypoints
   (`reconciler`, `treasury`).

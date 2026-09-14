@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"os"
 	"testing"
@@ -43,7 +44,10 @@ func (f *fakeVenue) GetLogs(_ context.Context, _ string, _ []string, _, _ uint64
 
 // A Trade log shaped the same way as internal/venue's synthetic fixture, on
 // the MON-USDC market seeded by migrations/0002_fills_market_tape.sql.
-func tradeLog(t *testing.T, price int64, filledSize int64, isBuy bool, txHash string, logIndex uint64) chain.Log {
+// blockNumber must match a header ApplyBlocks is given in the same call --
+// applyTrades looks up each trade's block timestamp from that window's
+// headers and errors on a trade referencing a block outside it.
+func tradeLog(t *testing.T, blockNumber uint64, price int64, filledSize int64, isBuy bool, txHash string, logIndex uint64) chain.Log {
 	t.Helper()
 	maker := common.HexToAddress("0x1111111111111111111111111111111111111a")
 	taker := common.HexToAddress("0x2222222222222222222222222222222222222b")
@@ -72,10 +76,37 @@ func tradeLog(t *testing.T, price int64, filledSize int64, isBuy bool, txHash st
 		Address:     "0x065C9d28E428A0db40191a54d33d5b7c71a9C394", // KuruMarketMONUSDC
 		Topics:      []string{venue.TradeTopic},
 		Data:        data,
-		BlockNumber: 1,
+		BlockNumber: blockNumber,
 		TxHash:      txHash,
 		LogIndex:    logIndex,
 	}
+}
+
+// testHeader is one block header, timestamped so upsertCandle has something
+// real to bucket by.
+func testHeader(number uint64) chain.BlockHeader {
+	return chain.BlockHeader{
+		Number:    number,
+		Hash:      "0x" + fmt.Sprintf("%064x", number),
+		Timestamp: uint64(time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC).Unix()) + number,
+	}
+}
+
+// cleanupCandle deletes the one candle bucket a testHeader-backed trade
+// would land in. Every fill-creating test uses a fixed block number (so a
+// second call has something deterministic to look up), which means a
+// candle's bucket_ts is the same on every run of the test process -- unlike
+// fills, which key on a fresh random tx_hash, a candle row would otherwise
+// accumulate trade_count across separate `go test` invocations instead of
+// each run starting clean.
+func cleanupCandle(t *testing.T, s *Store, market string, h chain.BlockHeader) {
+	t.Helper()
+	bucket := time.Unix(int64(h.Timestamp), 0).UTC().Truncate(candleIntervalS * time.Second)
+	t.Cleanup(func() {
+		s.pool.Exec(context.Background(),
+			`delete from candles where market = $1 and interval_s = $2 and bucket_ts = $3`,
+			market, candleIntervalS, bucket)
+	})
 }
 
 func TestApplyBlocksDecodesAndInsertsAFill(t *testing.T) {
@@ -85,10 +116,11 @@ func TestApplyBlocksDecodesAndInsertsAFill(t *testing.T) {
 
 	txHash := "0x" + randHex(t)
 	s.WithVenueClient(&fakeVenue{logs: []chain.Log{
-		tradeLog(t, 2_331_800, 857_810_000_000_000, true, txHash, 0),
+		tradeLog(t, 100, 2_331_800, 857_810_000_000_000, true, txHash, 0),
 	}})
 
-	headers := []chain.BlockHeader{{Number: 100, Hash: "0x" + randHex(t)}}
+	headers := []chain.BlockHeader{testHeader(100)}
+	cleanupCandle(t, s, "MON-USDC", headers[0])
 	cp := indexer.Checkpoint{BlockNumber: 100, BlockHash: headers[0].Hash}
 	if err := s.ApplyBlocks(ctx, consumer, headers, cp); err != nil {
 		t.Fatalf("ApplyBlocks: %v", err)
@@ -122,8 +154,29 @@ func TestApplyBlocksDecodesAndInsertsAFill(t *testing.T) {
 	if accountID != nil {
 		t.Errorf("accountID = %v, want nil: neither maker nor taker is a known account", *accountID)
 	}
-	if blockNumber != 1 {
-		t.Errorf("blockNumber = %d, want 1", blockNumber)
+	if blockNumber != 100 {
+		t.Errorf("blockNumber = %d, want 100", blockNumber)
+	}
+
+	bucket := time.Unix(int64(headers[0].Timestamp), 0).UTC().Truncate(candleIntervalS * time.Second)
+	var openPx, highPx, lowPx, closePx, volume string
+	var tradeCount int
+	if err := s.pool.QueryRow(ctx,
+		`select open_px::text, high_px::text, low_px::text, close_px::text, volume::text, trade_count
+		 from candles where market = $1 and interval_s = $2 and bucket_ts = $3`,
+		"MON-USDC", candleIntervalS, bucket).Scan(&openPx, &highPx, &lowPx, &closePx, &volume, &tradeCount); err != nil {
+		t.Fatalf("query candle: %v", err)
+	}
+	for name, got := range map[string]string{"open_px": openPx, "high_px": highPx, "low_px": lowPx, "close_px": closePx} {
+		if got != "0.023318000000000000" {
+			t.Errorf("candle %s = %q, want 0.023318000000000000", name, got)
+		}
+	}
+	if volume != "0.000857810000000000" {
+		t.Errorf("candle volume = %q, want 0.000857810000000000", volume)
+	}
+	if tradeCount != 1 {
+		t.Errorf("candle trade_count = %d, want 1", tradeCount)
 	}
 
 	// The checkpoint moved too, in the same transaction.
@@ -156,25 +209,57 @@ func TestApplyBlocksMatchesAKnownAccount(t *testing.T) {
 		s.pool.Exec(context.Background(), `delete from accounts where account_id = $1`, accountID)
 	})
 
+	// price = 100_000_000 / pricePrecision(1e8) = 1.0 USDC per MON.
+	// filledSize = 5_000_000_000_000_000 / 10^baseDec(18) = 0.005 MON.
+	// isBuy=false and the taker matched, so our own side is a sell: MON out,
+	// USDC in.
 	txHash := "0x" + randHex(t)
 	s.WithVenueClient(&fakeVenue{logs: []chain.Log{
-		tradeLog(t, 100, 2000, false, txHash, 0),
+		tradeLog(t, 200, 100_000_000, 5_000_000_000_000_000, false, txHash, 0),
 	}})
 
-	headers := []chain.BlockHeader{{Number: 200, Hash: "0x" + randHex(t)}}
+	headers := []chain.BlockHeader{testHeader(200)}
+	cleanupCandle(t, s, "MON-USDC", headers[0])
 	cp := indexer.Checkpoint{BlockNumber: 200, BlockHash: headers[0].Hash}
 	if err := s.ApplyBlocks(ctx, consumer, headers, cp); err != nil {
 		t.Fatalf("ApplyBlocks: %v", err)
 	}
 
 	var got *int64
+	var fillID int64
 	if err := s.pool.QueryRow(ctx,
-		`select account_id from fills where tx_hash = $1 and log_index = 0`,
-		mustDecodeHash(t, txHash)).Scan(&got); err != nil {
+		`select account_id, fill_id from fills where tx_hash = $1 and log_index = 0`,
+		mustDecodeHash(t, txHash)).Scan(&got, &fillID); err != nil {
 		t.Fatalf("query fill: %v", err)
 	}
 	if got == nil || *got != accountID {
 		t.Errorf("account_id = %v, want %d (matched via taker)", got, accountID)
+	}
+
+	legs := map[string]string{}
+	rows, err := s.pool.Query(ctx,
+		`select asset, delta::text from ledger_entries where txn_id = $1 and account_id = $2`,
+		fillID, accountID)
+	if err != nil {
+		t.Fatalf("query ledger_entries: %v", err)
+	}
+	for rows.Next() {
+		var asset, delta string
+		if err := rows.Scan(&asset, &delta); err != nil {
+			t.Fatalf("scan ledger_entries: %v", err)
+		}
+		legs[asset] = delta
+	}
+	rows.Close()
+
+	if len(legs) != 2 {
+		t.Fatalf("ledger_entries legs = %v, want exactly 2 (base and quote)", legs)
+	}
+	if legs["MON"] != "-0.005000000000000000" {
+		t.Errorf("MON leg = %q, want -0.005000000000000000 (we sold MON)", legs["MON"])
+	}
+	if legs["USDC"] != "0.005000000000000000" {
+		t.Errorf("USDC leg = %q, want 0.005000000000000000 (we received USDC)", legs["USDC"])
 	}
 }
 
@@ -184,10 +269,11 @@ func TestApplyBlocksIsIdempotentOnReplay(t *testing.T) {
 	consumer := "test-consumer-" + t.Name()
 
 	txHash := "0x" + randHex(t)
-	fv := &fakeVenue{logs: []chain.Log{tradeLog(t, 50, 10, true, txHash, 0)}}
+	fv := &fakeVenue{logs: []chain.Log{tradeLog(t, 300, 50, 10, true, txHash, 0)}}
 	s.WithVenueClient(fv)
 
-	headers := []chain.BlockHeader{{Number: 300, Hash: "0x" + randHex(t)}}
+	headers := []chain.BlockHeader{testHeader(300)}
+	cleanupCandle(t, s, "MON-USDC", headers[0])
 	cp := indexer.Checkpoint{BlockNumber: 300, BlockHash: headers[0].Hash}
 
 	if err := s.ApplyBlocks(ctx, consumer, headers, cp); err != nil {
@@ -207,6 +293,19 @@ func TestApplyBlocksIsIdempotentOnReplay(t *testing.T) {
 	if count != 1 {
 		t.Errorf("fills for this tx/logIndex = %d, want exactly 1 (fills_chain_uniq must dedupe a replay)", count)
 	}
+
+	// A replayed fill must not double-count its candle: applyTrade returns
+	// before touching the candle once the fill insert reports a duplicate.
+	bucket := time.Unix(int64(headers[0].Timestamp), 0).UTC().Truncate(candleIntervalS * time.Second)
+	var tradeCount int
+	if err := s.pool.QueryRow(ctx,
+		`select trade_count from candles where market = $1 and interval_s = $2 and bucket_ts = $3`,
+		"MON-USDC", candleIntervalS, bucket).Scan(&tradeCount); err != nil {
+		t.Fatalf("query candle: %v", err)
+	}
+	if tradeCount != 1 {
+		t.Errorf("candle trade_count = %d, want exactly 1 (a replay must not double-count)", tradeCount)
+	}
 }
 
 func TestApplyBlocksWithNoVenueClientOnlyAdvancesTheCheckpoint(t *testing.T) {
@@ -214,7 +313,7 @@ func TestApplyBlocksWithNoVenueClientOnlyAdvancesTheCheckpoint(t *testing.T) {
 	ctx := context.Background()
 	consumer := "test-consumer-" + t.Name()
 
-	headers := []chain.BlockHeader{{Number: 400, Hash: "0x" + randHex(t)}}
+	headers := []chain.BlockHeader{testHeader(400)}
 	cp := indexer.Checkpoint{BlockNumber: 400, BlockHash: headers[0].Hash}
 	if err := s.ApplyBlocks(ctx, consumer, headers, cp); err != nil {
 		t.Fatalf("ApplyBlocks: %v", err)
