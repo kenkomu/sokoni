@@ -25,8 +25,11 @@ down: ## Stop them
 
 .PHONY: migrate
 migrate: ## Apply the schema
-	docker compose exec -T postgres psql -U sokoni -d sokoni -v ON_ERROR_STOP=1 \
-		-f - < backend/migrations/0001_init.sql
+	for f in backend/migrations/*.sql; do \
+		echo "applying $$f"; \
+		docker compose exec -T postgres psql -U sokoni -d sokoni -v ON_ERROR_STOP=1 \
+			-f - < "$$f"; \
+	done
 
 ## -- backend ----------------------------------------------------------------
 

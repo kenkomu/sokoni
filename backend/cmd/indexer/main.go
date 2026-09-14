@@ -49,6 +49,7 @@ func main() {
 	rps := float64(envU64("INDEXER_RPC_RPS", 20))
 	client := chain.NewClient(env("MONAD_RPC_HTTP", chain.MainnetRPC), rps,
 		chain.WithBatchLimit(int(envU64("INDEXER_WINDOW", 16))))
+	db.WithVenueClient(client)
 
 	cfg := indexer.DefaultConfig()
 	cfg.Window = envU64("INDEXER_WINDOW", 16)

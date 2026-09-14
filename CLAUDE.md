@@ -199,9 +199,25 @@ refuse roughly one key in 256.
 
 ## Known gaps
 
-- `store.ApplyBlocks` has a `TODO(venue)`: it advances the checkpoint but decodes
-  no logs, so the indexer follows the chain and projects nothing yet. The venue
-  (the on-chain CLOB) is not yet named in code.
+- **`store.ApplyBlocks` now decodes Kuru `Trade` logs into `fills`,** wired via
+  `Store.WithVenueClient` (only `cmd/indexer` calls it — ADR 5, one chain
+  reader). Per confirmed-enabled market it does one `eth_getLogs` over the
+  window (not per block), decodes with `internal/venue`, and inserts with
+  `on conflict (tx_hash, log_index) do nothing`, in the same transaction as
+  the checkpoint. `fills` is the venue's whole tape, not a per-user table —
+  `migrations/0002_fills_market_tape.sql` made `account_id` nullable for
+  exactly this, and added `maker_address`/`taker_address` so a fill is never
+  anonymous even when neither side is one of our accounts. Both Kuru markets
+  are seeded with `getMarketParams()` values read live on 2026-09-14
+  (`price_precision`, `tick_size`, `min_qty` — see the migration).
+  **The px/qty scaling is inferred, not vendor-documented**: `price` divided
+  by `pricePrecision` and `filledSize` divided by `10^baseAssetDecimals`,
+  checked only against the one live `OrderCreated` log in
+  `internal/venue/kuru_test.go` (its `size` and `price` fields were exact
+  multiples of `sizePrecision`/`tickSize` and needed no further rescaling) —
+  `Trade`'s own field layout is still the same unconfirmed-by-a-live-log gap
+  `internal/venue`'s package doc already flags. `ledger_entries` and
+  `candles` are still not populated from fills — next slice of the same TODO.
 - Five of fifteen `internal` packages are `.gitkeep` — `auth`, `marketdata`,
   `orders`, `treasury`, `observability` — plus two of five `cmd` entrypoints
   (`reconciler`, `treasury`).
