@@ -74,3 +74,35 @@ that names the fix: *"not enough TST — deposit or reduce the amount"*, never
   stops the cheapest drain; a funded account still costs the paymaster gas per
   operation with no ceiling. That is Phase 3's risk-check surface, not this
   one's — recorded here so it isn't mistaken for done.
+
+## Addendum, 14 Sep 2026 — verified live on Monad testnet
+
+The gateway itself has now run the full prepare/submit loop against the real
+chain — not fakes, not Anvil. Against the same `SokoniAccountFactory` and
+`SokoniPaymaster` from ADR 8's live addendum, via a real HTTP server on
+`:8080`:
+
+1. `POST /v1/accounts` — the gateway independently derived the same
+   counterfactual address `cmd/onboard` had already deployed, and correctly
+   reported `deployed: true`.
+2. `POST /v1/ops` — prepared a `transfer` of an ERC-20 the account held a real
+   balance of (a throwaway test token, minted for this purpose and deleted
+   after). `deploysAccount: false`, correctly, since it already existed.
+3. Signed the returned challenge with the same pure-Python passkey the
+   Foundry tests use — playing the phone's part, since no device was
+   involved.
+4. `POST /v1/ops/{id}/submit` — the returned `userOpHash` matched the prepare
+   step's `challenge` exactly, confirming nothing was rebuilt in between.
+5. `GET /v1/ops/{id}` — `landed` on the first poll.
+
+Verified independently on-chain: the transaction succeeded, the token's
+`Transfer` event shows exactly the requested amount moving from the account
+to the recipient, both balances reflect it, and the account's MON balance
+was zero before and after.
+
+This is the same wire format `mobile/lib/data/api/sokoni_api.dart` sends — the
+request bodies used here were built to match `PasskeyAssertion.toJson()`
+exactly, the same contract `http_test.go` and `api_test.dart` already pin
+against each other. What remains unverified is only the last link: an actual
+device signing an actual biometric prompt. Everything downstream of that has
+now run for real.
