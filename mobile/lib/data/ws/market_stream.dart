@@ -12,9 +12,11 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 /// Reconnection is exponential with jitter: a venue hiccup must not turn every
 /// client into a synchronised thundering herd.
 class MarketStream {
-  MarketStream(this._url);
+  MarketStream(this._url, {WebSocketChannel Function(Uri)? channelFactory})
+    : _channelFactory = channelFactory ?? WebSocketChannel.connect;
 
   final String _url;
+  final WebSocketChannel Function(Uri) _channelFactory;
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _sub;
   Timer? _reconnect;
@@ -28,7 +30,7 @@ class MarketStream {
 
   void connect() {
     _reconnect?.cancel();
-    _channel = WebSocketChannel.connect(Uri.parse(_url));
+    _channel = _channelFactory(Uri.parse(_url));
     _sub = _channel!.stream.listen(
       _onMessage,
       onDone: _scheduleReconnect,

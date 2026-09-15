@@ -4,6 +4,7 @@ import '../../core/config.dart';
 import '../../data/api/sokoni_api.dart';
 import '../../data/passkey/passkey_service.dart';
 import '../../design/theme.dart';
+import '../markets/markets_screen.dart';
 import 'passkey_controller.dart';
 
 /// Proves the Phase 1 thesis on a real device: create an account with a
@@ -128,6 +129,18 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             if (account != null) ...[
               const SizedBox(height: 16),
               _AccountCard(account: account),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed:
+                    () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => MarketsScreen(config: widget.config),
+                      ),
+                    ),
+                icon: const Icon(Icons.candlestick_chart_outlined),
+                label: const Text('Continue to markets'),
+              ),
             ],
 
             const SizedBox(height: 24),

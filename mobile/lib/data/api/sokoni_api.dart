@@ -85,8 +85,48 @@ class SokoniApi {
   Future<OpStatus> status(String opId) async =>
       OpStatus.fromJson(await _get('/v1/ops/${Uri.encodeComponent(opId)}'));
 
-  Future<Map<String, dynamic>> _get(String path) =>
-      _send(() => _dio.get<Map<String, dynamic>>(path));
+  Future<List<MarketInfo>> markets() async {
+    final j = await _get('/v1/markets');
+    return [
+      for (final m in (j['markets'] as List? ?? const []))
+        MarketInfo.fromJson(m as Map<String, dynamic>),
+    ];
+  }
+
+  Future<List<Candle>> candles({
+    required String symbol,
+    int interval = 60,
+    int limit = 100,
+  }) async {
+    final j = await _get(
+      '/v1/markets/${Uri.encodeComponent(symbol)}/candles',
+      query: {'interval': interval, 'limit': limit},
+    );
+    return [
+      for (final c in (j['candles'] as List? ?? const []))
+        Candle.fromJson(c as Map<String, dynamic>),
+    ];
+  }
+
+  Future<List<MarketTrade>> recentTrades({
+    required String symbol,
+    int limit = 50,
+  }) async {
+    final j = await _get(
+      '/v1/markets/${Uri.encodeComponent(symbol)}/trades',
+      query: {'limit': limit},
+    );
+    return [
+      for (final t in (j['trades'] as List? ?? const []))
+        MarketTrade.fromJson(t as Map<String, dynamic>),
+    ];
+  }
+
+  Future<Map<String, dynamic>> _get(
+    String path, {
+    Map<String, dynamic>? query,
+  }) =>
+      _send(() => _dio.get<Map<String, dynamic>>(path, queryParameters: query));
 
   Future<Map<String, dynamic>> _post(String path, Map<String, dynamic> body) =>
       _send(() => _dio.post<Map<String, dynamic>>(path, data: body));
@@ -306,6 +346,101 @@ class OpStatus {
   /// Nothing more will happen to this operation.
   bool get isFinal =>
       status == 'landed' || status == 'reverted' || status == 'expired';
+}
+
+class MarketInfo {
+  const MarketInfo({
+    required this.symbol,
+    required this.baseToken,
+    required this.quoteToken,
+    required this.baseDecimals,
+    required this.quoteDecimals,
+    required this.tickSize,
+    required this.minQty,
+  });
+
+  factory MarketInfo.fromJson(Map<String, dynamic> j) => MarketInfo(
+    symbol: _str(j, 'symbol'),
+    baseToken: _str(j, 'baseToken'),
+    quoteToken: _str(j, 'quoteToken'),
+    baseDecimals: _int(j, 'baseDecimals'),
+    quoteDecimals: _int(j, 'quoteDecimals'),
+    tickSize: _str(j, 'tickSize'),
+    minQty: _str(j, 'minQty'),
+  );
+
+  final String symbol;
+  final String baseToken;
+  final String quoteToken;
+  final int baseDecimals;
+  final int quoteDecimals;
+
+  /// Decimal strings, per core/money.dart — never parsed as a double.
+  final String tickSize;
+  final String minQty;
+}
+
+class Candle {
+  const Candle({
+    required this.bucketTs,
+    required this.open,
+    required this.high,
+    required this.low,
+    required this.close,
+    required this.volume,
+    required this.tradeCount,
+  });
+
+  factory Candle.fromJson(Map<String, dynamic> j) => Candle(
+    bucketTs: DateTime.parse(_str(j, 'bucketTs')),
+    open: _str(j, 'open'),
+    high: _str(j, 'high'),
+    low: _str(j, 'low'),
+    close: _str(j, 'close'),
+    volume: _str(j, 'volume'),
+    tradeCount: _int(j, 'tradeCount'),
+  );
+
+  final DateTime bucketTs;
+
+  /// Decimal strings — never parsed as a double.
+  final String open;
+  final String high;
+  final String low;
+  final String close;
+  final String volume;
+  final int tradeCount;
+}
+
+class MarketTrade {
+  const MarketTrade({
+    required this.fillId,
+    required this.side,
+    required this.px,
+    required this.qty,
+    required this.blockNumber,
+    required this.txHash,
+  });
+
+  factory MarketTrade.fromJson(Map<String, dynamic> j) => MarketTrade(
+    fillId: _int(j, 'fillId'),
+    side: _str(j, 'side'),
+    px: _str(j, 'px'),
+    qty: _str(j, 'qty'),
+    blockNumber: _int(j, 'blockNumber'),
+    txHash: _str(j, 'txHash'),
+  );
+
+  final int fillId;
+
+  /// 'buy' | 'sell' — the taker's side, per fills.side in the schema.
+  final String side;
+
+  /// Decimal strings — never parsed as a double.
+  final String px;
+  final String qty;
+  final int blockNumber;
+  final String txHash;
 }
 
 String _str(Map<String, dynamic> j, String key) {
