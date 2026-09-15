@@ -123,8 +123,11 @@ func (h *Hub) poll(ctx context.Context) {
 
 // Subscribe registers sub for every channel and immediately pushes each
 // channel's current row, so a fresh connection is not blank until the next
-// poll tick. This snapshot never touches h.seen -- it would otherwise make
-// the very next tick think nothing had changed for every *other* subscriber.
+// poll tick. The snapshot's key is recorded into h.seen exactly like a poll
+// would -- caught live in a manual smoke test: leaving h.seen untouched here
+// meant the very next poll tick saw "no seen entry yet" for a channel that
+// in fact had not changed, and rebroadcast the same row a second time (with
+// a new, valid-looking seq) to every subscriber, not just the new one.
 func (h *Hub) Subscribe(ctx context.Context, sub *subscriber, channels []string) {
 	h.mu.Lock()
 	for _, ch := range channels {
@@ -140,10 +143,13 @@ func (h *Hub) Subscribe(ctx context.Context, sub *subscriber, channels []string)
 		if !ok {
 			continue
 		}
-		data, _, ok := h.fetch(ctx, kind, symbol, interval)
+		data, key, ok := h.fetch(ctx, kind, symbol, interval)
 		if !ok {
 			continue
 		}
+		h.mu.Lock()
+		h.seen[ch] = key
+		h.mu.Unlock()
 		h.sendTo(sub, ch, kind, data)
 	}
 }

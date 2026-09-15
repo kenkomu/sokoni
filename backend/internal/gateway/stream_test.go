@@ -102,6 +102,40 @@ func TestStreamBroadcastsIncreasingSeq(t *testing.T) {
 	}
 }
 
+// Caught live in a manual smoke test: a poll tick right after a subscribe's
+// snapshot used to rebroadcast the exact same row a second time, because the
+// snapshot never recorded its key into h.seen. Without a real change, one
+// poll tick after subscribing must produce no second message.
+func TestStreamSnapshotDoesNotDuplicateOnTheNextPoll(t *testing.T) {
+	r, srv := newServer(t)
+	r.markets.markets = []store.Market{{Symbol: "MON-USDC"}}
+	r.markets.trades["MON-USDC"] = []store.Trade{
+		{FillID: 1, Side: "buy", Px: "1", Qty: "1", BlockNumber: 1, TxHash: make([]byte, 32)},
+	}
+
+	conn, closeConn := dialStream(t, srv)
+	defer closeConn()
+	if err := conn.Write(context.Background(), websocket.MessageText,
+		[]byte(`{"op":"sub","ch":["trades:MON-USDC"]}`)); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	readMessage(t, conn) // the snapshot
+
+	hubCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.hub.Run(hubCtx, 5*time.Millisecond)
+
+	// Several poll ticks pass with nothing new. If the bug is back, one of
+	// them rebroadcasts the same row and this read succeeds instead of
+	// timing out.
+	ctx, readCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer readCancel()
+	_, _, err := conn.Read(ctx)
+	if err == nil {
+		t.Fatal("got a second message with no real change -- the snapshot's row was rebroadcast")
+	}
+}
+
 func TestStreamIgnoresAnUnknownOp(t *testing.T) {
 	_, srv := newServer(t)
 	conn, closeConn := dialStream(t, srv)
