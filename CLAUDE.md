@@ -236,8 +236,25 @@ refuse roughly one key in 256.
 - Five of fifteen `internal` packages are `.gitkeep` — `auth`, `marketdata`,
   `orders`, `treasury`, `observability` — plus two of five `cmd` entrypoints
   (`reconciler`, `treasury`).
-- On mobile, only `features/onboarding` exists; `markets`, `trade`, `portfolio`,
-  `settings` and the `domain/` layer are placeholders.
+- **The gateway now serves market data**: `GET /v1/markets`,
+  `/v1/markets/{symbol}/candles`, `/v1/markets/{symbol}/trades`, and a
+  WebSocket at `GET /v1/stream` (`{"op":"sub","ch":[...]}` to subscribe,
+  channel grammar `"candles:<symbol>:<interval>"` / `"trades:<symbol>"`).
+  The gateway still has no chain read subscription of its own (ADR 5) — the
+  new `Hub` (`internal/gateway/stream.go`) polls Postgres every 750ms and
+  broadcasts only what a poll notices changed; there is no push straight
+  from the indexer. `Deps.Markets` is nil in the no-`DATABASE_URL` laptop
+  mode, same as `Accounts`; the endpoints answer 502 rather than the
+  gateway refusing to start.
+- On mobile, `features/onboarding`, `markets` and `trade` now exist;
+  `portfolio`, `settings` and the `domain/` layer are still placeholders.
+  `MarketsScreen` shows static market metadata only (no live prices in the
+  list); `TradeScreen` does the live work — a REST snapshot, then a
+  `MarketStream` subscription, with a detected sequence gap recovered by
+  re-fetching REST rather than any special WS message. The candlestick
+  chart is a hand-painted `CustomPainter`: the pinned `fl_chart` (0.69.2)
+  has no candlestick chart, confirmed by checking its actual resolved
+  source before writing against it, not assumed from the package name.
 - **Verified live on Monad testnet, 14 Sep 2026.** `cmd/onboard` deployed a
   fresh `SokoniAccount` and moved a call through it with a passkey signature,
   sponsored by a real `SokoniPaymaster` (`0xD3918f47F421aA0EC28b1f2d35Bc21F0Ca583287`,
