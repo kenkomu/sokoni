@@ -30,6 +30,13 @@ dependencies:
   local_auth: ^2.3.0
   flutter_secure_storage: ^9.2.4
 
+  # Option 2 / Mera path: an ECDSA (secp256k1) key generated on-device and
+  # held in flutter_secure_storage rather than a WebAuthn credential — see
+  # data/mera/mera_key_service.dart for why. web3dart's signPersonalMessage
+  # applies exactly the EIP-191 "\x19Ethereum Signed Message:\n32" prefix
+  # backend/internal/account/mera.go's meraEthSignedHash expects.
+  web3dart: ^2.7.3
+
   # Money. Never a double — mirrors the backend's big.Int + scale.
   decimal: ^3.0.2
 
@@ -54,6 +61,10 @@ dev_dependencies:
   riverpod_generator: ^2.6.3
   mocktail: ^1.0.4
   stream_channel: ^2.1.4
+  # TestFlutterSecureStoragePlatform (used to fake the Keystore/Keychain in
+  # mera_controller_test.dart) lives behind this interface package, not the
+  # main flutter_secure_storage export.
+  flutter_secure_storage_platform_interface: ^1.1.2
 
 flutter:
   uses-material-design: true

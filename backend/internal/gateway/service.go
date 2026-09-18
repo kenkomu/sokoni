@@ -109,7 +109,13 @@ func DefaultGas() GasLimits {
 type Config struct {
 	EntryPoint common.Address
 	Factory    common.Address
-	ChainID    *big.Int
+	// MeraFactory is the Option 2 path's factory — a plain
+	// SimpleAccountFactory, unmodified (see
+	// contracts/script/DeployMeraAccountFactory.s.sol). Zero value disables
+	// the /v1/mera/* endpoints rather than the gateway refusing to start,
+	// the same graceful-degradation pattern Markets already uses.
+	MeraFactory common.Address
+	ChainID     *big.Int
 	// sha256 of the relying-party id every credential must be bound to.
 	RPIDHash [32]byte
 	// The only tokens the paymaster will pay to move. Without an allowlist the
@@ -131,10 +137,15 @@ type Deps struct {
 	Bundler  Bundler
 	Sponsor  Sponsor
 	Accounts Accounts
-	Ops      PendingOps
-	Markets  MarketData
-	Log      *slog.Logger
-	Now      func() time.Time
+	// MeraAccounts is nil in the same "feature not configured" sense as
+	// Markets when MeraFactory is unset — RegisterMera/PrepareMera/
+	// SubmitMera answer KindUpstream rather than the gateway refusing to
+	// start.
+	MeraAccounts MeraAccounts
+	Ops          PendingOps
+	Markets      MarketData
+	Log          *slog.Logger
+	Now          func() time.Time
 }
 
 type Service struct {
@@ -225,6 +236,15 @@ type AccountView struct {
 	Deployed     bool   `json:"deployed"`
 }
 
+// MeraAccountView is AccountView's Option 2 counterpart: the account is
+// identified by its owner address rather than a WebAuthn credential id,
+// because there is no separate credential — the address *is* the identity.
+type MeraAccountView struct {
+	Owner    string `json:"owner"`
+	Address  string `json:"address"`
+	Deployed bool   `json:"deployed"`
+}
+
 // Intent is what the phone asks for. Never calldata: the phone does not
 // ABI-encode, and an endpoint that sponsored arbitrary calldata would be a
 // general-purpose free gas tap.
@@ -268,10 +288,13 @@ type StatusView struct {
 	Reason      string `json:"reason,omitempty"`
 }
 
-// candleIntervalS is the only candle bucket size store.ApplyBlocks populates
-// today (internal/store's candleIntervalS constant) — kept in sync by hand
-// since gateway does not import that private constant.
+// candleIntervalS is the default when a request omits ?interval, and
+// candleIntervalsS every bucket size store.ApplyBlocks actually populates
+// (internal/store's candleIntervalsS) — kept in sync by hand since gateway
+// does not import that private var.
 const candleIntervalS = 60
+
+var candleIntervalsS = map[int]bool{60: true, 300: true, 3600: true, 86400: true}
 
 type MarketView struct {
 	Symbol     string `json:"symbol"`
@@ -619,6 +642,246 @@ func assertionMessage(err error) string {
 	}
 }
 
+// -------------------------------------------------------------- mera (Option 2)
+//
+// The ECDSA-owner path: PrepareMera/SubmitMera mirror Prepare/Submit exactly
+// in shape (same two-round-trip contract, same "never rebuild on submit"
+// rule), differing only in how the account is addressed and how its
+// signature is checked. RegisterMera mirrors Register the same way.
+
+func (s *Service) meraEnabled() error {
+	if s.d.MeraAccounts == nil || s.cfg.MeraFactory == (common.Address{}) {
+		return fail(KindUpstream, "mera_not_configured",
+			"the Mera account path is not configured on this gateway", nil)
+	}
+	return nil
+}
+
+// RegisterMera records the smart account a Mera-derived owner key controls.
+// Unlike Register, there is nothing to validate about the key itself — any
+// non-zero address is a legitimate ECDSA public key; a passkey's PRF output
+// deriving a bad one is not something this endpoint could detect anyway.
+func (s *Service) RegisterMera(ctx context.Context, owner common.Address) (*MeraAccountView, error) {
+	if err := s.meraEnabled(); err != nil {
+		return nil, err
+	}
+	if owner == (common.Address{}) {
+		return nil, fail(KindInvalid, "bad_owner", "owner must be a non-zero address", nil)
+	}
+
+	existing, found, err := s.d.MeraAccounts.Get(ctx, owner)
+	if err != nil {
+		return nil, fail(KindUpstream, "store", "could not read mera accounts", err)
+	}
+
+	address := existing.Address
+	if !found {
+		if address, err = s.meraCounterfactual(ctx, owner); err != nil {
+			return nil, err
+		}
+		if err := s.d.MeraAccounts.Put(ctx, MeraCredential{
+			Owner: owner, Address: address, CreatedAt: s.d.Now(),
+		}); err != nil {
+			return nil, fail(KindUpstream, "store", "could not save the account", err)
+		}
+	}
+
+	deployed, err := s.deployed(ctx, address)
+	if err != nil {
+		return nil, err
+	}
+	return &MeraAccountView{Owner: owner.Hex(), Address: address.Hex(), Deployed: deployed}, nil
+}
+
+// PrepareMera builds, sponsors and stores an operation for a Mera-owned
+// account. Reuses the same PendingOps store as Prepare — an operation id is
+// an operation id regardless of which account type will sign it — with the
+// owner's hex address standing in for the WebAuthn credential id that field
+// normally carries.
+func (s *Service) PrepareMera(ctx context.Context, owner common.Address, in Intent) (*PreparedView, error) {
+	if err := s.meraEnabled(); err != nil {
+		return nil, err
+	}
+	cred, found, err := s.d.MeraAccounts.Get(ctx, owner)
+	if err != nil {
+		return nil, fail(KindUpstream, "store", "could not read mera accounts", err)
+	}
+	if !found {
+		return nil, fail(KindNotFound, "unknown_owner", "register this owner before sending anything", nil)
+	}
+
+	token, to, amount, err := s.validateIntent(in)
+	if err != nil {
+		return nil, err
+	}
+
+	balance, err := s.balanceOf(ctx, token.Address, cred.Address)
+	if err != nil {
+		return nil, err
+	}
+	if balance.Cmp(amount) < 0 {
+		return nil, fail(KindInvalid, "insufficient_balance", fmt.Sprintf(
+			"not enough %s — the account holds %s base units and this sends %s; deposit or reduce the amount",
+			token.Symbol, balance, amount), nil)
+	}
+
+	inner, err := account.EncodeERC20Transfer(to, amount)
+	if err != nil {
+		return nil, fail(KindInvalid, "bad_amount", err.Error(), nil)
+	}
+	callData, err := account.EncodeExecute(token.Address, new(big.Int), inner)
+	if err != nil {
+		return nil, fail(KindInvalid, "encode", "could not encode the call", err)
+	}
+
+	deployed, err := s.deployed(ctx, cred.Address)
+	if err != nil {
+		return nil, err
+	}
+
+	gas := s.cfg.Gas
+	op := &userop.UserOperation{
+		Sender:               cred.Address,
+		CallData:             callData,
+		VerificationGasLimit: gas.Verification,
+		CallGasLimit:         gas.Call,
+		PreVerificationGas:   gas.PreVerification,
+		MaxPriorityFeePerGas: gas.MaxPriorityFee,
+		MaxFeePerGas:         gas.MaxFee,
+	}
+	if !deployed {
+		op.InitCode, err = account.InitCodeMera(s.cfg.MeraFactory, owner, big.NewInt(accountSalt))
+		if err != nil {
+			return nil, fail(KindInvalid, "encode", "could not encode account deployment", err)
+		}
+		op.VerificationGasLimit = gas.VerificationWithDeploy
+	}
+
+	if op.Nonce, err = s.nonce(ctx, cred.Address); err != nil {
+		return nil, err
+	}
+
+	now := s.d.Now()
+	expires := now.Add(s.cfg.OpTTL)
+	validUntil := uint64(expires.Add(s.cfg.LandingMargin).Unix())
+
+	pmd, err := s.d.Sponsor.Approve(op, validUntil, 0, s.d.Sponsor.MaxCost(op))
+	if err != nil {
+		return nil, fail(KindUpstream, "sponsor", "could not sponsor this operation", err)
+	}
+	op.PaymasterAndData = pmd
+
+	hash, err := op.Hash(s.cfg.EntryPoint, s.cfg.ChainID)
+	if err != nil {
+		return nil, fail(KindInvalid, "hash", "could not hash the operation", err)
+	}
+
+	id, err := newOpID()
+	if err != nil {
+		return nil, fail(KindUpstream, "id", "could not mint an operation id", err)
+	}
+	if err := s.d.Ops.Put(ctx, Pending{
+		ID: id, CredentialID: owner.Hex(), Op: op, UserOpHash: hash, ExpiresAt: expires,
+	}); err != nil {
+		return nil, fail(KindUpstream, "store", "could not save the operation", err)
+	}
+
+	return &PreparedView{
+		OpID:           id,
+		Challenge:      hash.Hex(),
+		Sender:         cred.Address.Hex(),
+		DeploysAccount: !deployed,
+		ExpiresAt:      expires.UTC(),
+	}, nil
+}
+
+// SubmitMera accepts a 65-byte ECDSA signature (r, s, v — exactly what
+// web3dart's Credentials.signPersonalMessage-style signers already produce)
+// over the userOpHash, in place of Submit's WebAuthn assertion.
+func (s *Service) SubmitMera(ctx context.Context, opID string, owner common.Address, sig []byte) (*SubmittedView, error) {
+	if err := s.meraEnabled(); err != nil {
+		return nil, err
+	}
+	p, found, err := s.d.Ops.Get(ctx, opID)
+	if err != nil {
+		return nil, fail(KindUpstream, "store", "could not read the operation", err)
+	}
+	if !found {
+		return nil, fail(KindNotFound, "unknown_op", "no such operation; prepare a new one", nil)
+	}
+	if p.Submitted() {
+		return &SubmittedView{OpID: opID, UserOpHash: p.BundlerHash.Hex(), Status: StatusSubmitted}, nil
+	}
+	if s.d.Now().After(p.ExpiresAt) {
+		return nil, fail(KindExpired, "op_expired", "this operation expired before it was signed; prepare a new one", nil)
+	}
+	ownerHex := owner.Hex()
+	if ownerHex != "" && ownerHex != p.CredentialID {
+		return nil, fail(KindInvalid, "wrong_owner",
+			"signed with a different key than the one this operation was prepared for", nil)
+	}
+
+	cred, found, err := s.d.MeraAccounts.Get(ctx, owner)
+	if err != nil {
+		return nil, fail(KindUpstream, "store", "could not read mera accounts", err)
+	}
+	if !found {
+		return nil, fail(KindNotFound, "unknown_owner", "the owner for this operation is no longer registered", nil)
+	}
+
+	if err := account.VerifyMeraSignature(p.UserOpHash, sig, owner); err != nil {
+		return nil, fail(KindInvalid, "bad_signature", meraSignatureMessage(err), err)
+	}
+
+	encoded, err := account.EncodeMeraSignature(sig)
+	if err != nil {
+		return nil, fail(KindInvalid, "bad_signature", "could not encode the signature", err)
+	}
+	op := *p.Op
+	op.Signature = encoded
+
+	sent, err := s.d.Bundler.SendUserOperation(ctx, &op)
+	if err != nil {
+		return nil, fail(KindUpstream, "bundler", "the bundler did not accept the operation", err)
+	}
+	if sent != p.UserOpHash {
+		s.d.Log.Error("bundler userOpHash differs from ours — encoding drift",
+			"op", opID, "ours", p.UserOpHash, "bundler", sent, "owner", cred.Owner)
+	}
+
+	if err := s.d.Ops.MarkSubmitted(ctx, opID, sent, s.d.Now()); err != nil {
+		return nil, fail(KindUpstream, "store", "sent, but could not record it", err)
+	}
+	return &SubmittedView{OpID: opID, UserOpHash: sent.Hex(), Status: StatusSubmitted}, nil
+}
+
+func meraSignatureMessage(err error) string {
+	switch {
+	case errors.Is(err, account.ErrMeraSignatureLength):
+		return "the signature must be exactly 65 bytes (r, s, v)"
+	case errors.Is(err, account.ErrMeraBadSignature):
+		return "the signature does not recover to this account's owner address"
+	default:
+		return "the signature is malformed"
+	}
+}
+
+func (s *Service) meraCounterfactual(ctx context.Context, owner common.Address) (common.Address, error) {
+	data, err := account.EncodeGetMeraAddress(owner, big.NewInt(accountSalt))
+	if err != nil {
+		return common.Address{}, fail(KindInvalid, "encode", "could not encode the address lookup", err)
+	}
+	out, err := s.d.Chain.Call(ctx, s.cfg.MeraFactory.Hex(), account.Hex(data))
+	if err != nil {
+		return common.Address{}, fail(KindUpstream, "chain", "could not ask the factory for the account address", err)
+	}
+	if len(out) != 32 {
+		return common.Address{}, fail(KindUpstream, "chain",
+			fmt.Sprintf("factory at %s returned %d bytes; is it deployed on this chain?", s.cfg.MeraFactory, len(out)), nil)
+	}
+	return common.BytesToAddress(out[12:]), nil
+}
+
 // ------------------------------------------------------------------ status
 
 func (s *Service) Status(ctx context.Context, opID string) (*StatusView, error) {
@@ -769,12 +1032,13 @@ func (s *Service) Candles(ctx context.Context, symbol string, intervalS, limit i
 	} else if !found {
 		return nil, fail(KindNotFound, "market_not_found", "no such market", nil)
 	}
-	// Only interval_s=60 is ever populated (store's candleIntervalS) — reject
-	// anything else rather than silently returning the wrong bucket size,
-	// which a chart would render as if it were what was asked for.
-	if intervalS != candleIntervalS {
+	// Only the intervals store.ApplyBlocks actually populates exist as rows
+	// at all — reject anything else rather than silently returning an empty
+	// or wrong-bucket-size result, which a chart would render as if it were
+	// what was asked for.
+	if !candleIntervalsS[intervalS] {
 		return nil, fail(KindInvalid, "unsupported_interval",
-			fmt.Sprintf("only %ds candles are available", candleIntervalS), nil)
+			"interval must be one of 60, 300, 3600, 86400 seconds", nil)
 	}
 
 	candles, err := s.d.Markets.Candles(ctx, symbol, intervalS, limit)

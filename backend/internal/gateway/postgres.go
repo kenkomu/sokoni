@@ -96,3 +96,75 @@ func (p *PostgresAccounts) Put(ctx context.Context, c Credential) error {
 
 	return tx.Commit(ctx)
 }
+
+// PostgresMeraAccounts stores credentials in the `accounts` and
+// `mera_credentials` tables from 0005_mera_credentials.sql — the Option 2
+// counterpart to PostgresAccounts, keyed by owner address instead of a
+// WebAuthn credential id.
+type PostgresMeraAccounts struct {
+	pool *pgxpool.Pool
+	ids  *id.Generator
+}
+
+func NewPostgresMeraAccounts(pool *pgxpool.Pool, ids *id.Generator) *PostgresMeraAccounts {
+	return &PostgresMeraAccounts{pool: pool, ids: ids}
+}
+
+func (p *PostgresMeraAccounts) Get(ctx context.Context, owner common.Address) (MeraCredential, bool, error) {
+	var addr []byte
+	var created time.Time
+	err := p.pool.QueryRow(ctx, `
+		select a.smart_account, m.created_at
+		  from mera_credentials m
+		  join accounts a on a.account_id = m.account_id
+		 where m.owner_address = $1`,
+		owner.Bytes()).Scan(&addr, &created)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MeraCredential{}, false, nil
+	}
+	if err != nil {
+		return MeraCredential{}, false, err
+	}
+	return MeraCredential{
+		Owner:     owner,
+		Address:   common.BytesToAddress(addr),
+		CreatedAt: created,
+	}, true, nil
+}
+
+func (p *PostgresMeraAccounts) Put(ctx context.Context, c MeraCredential) error {
+	accountID, err := p.ids.Next()
+	if err != nil {
+		return fmt.Errorf("mint account id: %w", err)
+	}
+
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		insert into accounts (account_id, smart_account) values ($1, $2)
+		on conflict (smart_account) do nothing`,
+		accountID, c.Address.Bytes()); err != nil {
+		return fmt.Errorf("insert account: %w", err)
+	}
+
+	var existing int64
+	if err := tx.QueryRow(ctx,
+		`select account_id from accounts where smart_account = $1`,
+		c.Address.Bytes()).Scan(&existing); err != nil {
+		return fmt.Errorf("find account: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		insert into mera_credentials (owner_address, account_id)
+		values ($1, $2)
+		on conflict (owner_address) do nothing`,
+		c.Owner.Bytes(), existing); err != nil {
+		return fmt.Errorf("insert mera credential: %w", err)
+	}
+
+	return tx.Commit(ctx)
+}

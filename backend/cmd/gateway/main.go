@@ -102,6 +102,11 @@ func loadConfig() (gateway.Config, wiring, error) {
 	if err != nil {
 		return cfg, w, err
 	}
+	// Optional: unset leaves MeraFactory at the zero address, and the
+	// service layer answers /v1/mera/* with KindUpstream rather than the
+	// gateway refusing to start — same graceful-degradation shape as
+	// Markets/DATABASE_URL.
+	meraFac := os.Getenv("SOKONI_MERA_FACTORY")
 
 	node, err := strconv.ParseInt(env("GATEWAY_NODE_ID", "1"), 10, 64)
 	if err != nil {
@@ -144,7 +149,13 @@ func loadConfig() (gateway.Config, wiring, error) {
 	cfg = gateway.Config{
 		EntryPoint: common.HexToAddress(env("ENTRYPOINT", chain.EntryPointV07)),
 		Factory:    common.HexToAddress(fac),
-		ChainID:    chainID,
+		MeraFactory: func() common.Address {
+			if meraFac == "" {
+				return common.Address{}
+			}
+			return common.HexToAddress(meraFac)
+		}(),
+		ChainID: chainID,
 		// The same relying party the phone binds its passkeys to (SOKONI_RP_ID
 		// on the client). A mismatch fails every assertion with "wrong relying
 		// party", which is at least an honest error.
@@ -185,7 +196,7 @@ func run(log *slog.Logger) error {
 	log.Info("preflight passed", "chain", cfg.ChainID, "entryPoint", cfg.EntryPoint,
 		"paymaster", w.paymaster, "signer", sponsor.SignerAddress(), "tokens", len(cfg.Tokens))
 
-	accounts, db, closeDB, err := openAccounts(ctx, w, log)
+	accounts, meraAccounts, db, closeDB, err := openAccounts(ctx, w, log)
 	if err != nil {
 		return err
 	}
@@ -206,13 +217,14 @@ func run(log *slog.Logger) error {
 	}
 
 	svc := gateway.NewService(cfg, gateway.Deps{
-		Chain:    rpc,
-		Bundler:  bnd,
-		Sponsor:  sponsor,
-		Accounts: accounts,
-		Ops:      ops,
-		Markets:  markets,
-		Log:      log,
+		Chain:        rpc,
+		Bundler:      bnd,
+		Sponsor:      sponsor,
+		Accounts:     accounts,
+		MeraAccounts: meraAccounts,
+		Ops:          ops,
+		Markets:      markets,
+		Log:          log,
 	})
 
 	var hub *gateway.Hub
@@ -281,19 +293,24 @@ func openOps(w wiring, log *slog.Logger) (gateway.PendingOps, func(), error) {
 // The returned *store.Store is nil in memory mode and non-nil otherwise --
 // it backs Deps.Markets too (run's caller), so market data and accounts
 // share one connection rather than opening a second pool.
-func openAccounts(ctx context.Context, w wiring, log *slog.Logger) (gateway.Accounts, *store.Store, func(), error) {
+// openAccounts also returns the Mera (Option 2) accounts store, sharing the
+// same pool and id.Generator as the WebAuthn one rather than opening a
+// second connection — both just mint account_id rows in the same table.
+func openAccounts(ctx context.Context, w wiring, log *slog.Logger) (gateway.Accounts, gateway.MeraAccounts, *store.Store, func(), error) {
 	if w.dsn == "" {
 		log.Warn("DATABASE_URL not set; accounts are in memory and a restart forgets them")
-		return gateway.NewMemoryAccounts(), nil, func() {}, nil
+		return gateway.NewMemoryAccounts(), gateway.NewMemoryMeraAccounts(), nil, func() {}, nil
 	}
 	db, err := store.Open(ctx, w.dsn)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("open database: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("open database: %w", err)
 	}
 	gen, err := id.NewGenerator(w.nodeID)
 	if err != nil {
 		db.Close()
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	return gateway.NewPostgresAccounts(db.Pool(), gen), db, db.Close, nil
+	return gateway.NewPostgresAccounts(db.Pool(), gen),
+		gateway.NewPostgresMeraAccounts(db.Pool(), gen),
+		db, db.Close, nil
 }

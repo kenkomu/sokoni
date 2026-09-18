@@ -3,27 +3,45 @@ import 'package:flutter/material.dart';
 import '../../core/config.dart';
 import '../../data/api/sokoni_api.dart';
 import '../../data/passkey/passkey_service.dart';
+import '../../design/app_shell.dart';
 import '../../design/theme.dart';
-import '../markets/markets_screen.dart';
 import 'passkey_controller.dart';
+import 'welcome_screen.dart';
 
-/// Proves the Phase 1 thesis on a real device: create an account with a
-/// fingerprint, then move a token with it. No seed phrase appears anywhere,
+/// Create an account with a fingerprint — no seed phrase appears anywhere,
 /// because there isn't one, and the account never holds MON, because the
-/// paymaster pays.
-class OnboardingScreen extends StatefulWidget {
-  const OnboardingScreen({required this.config, super.key});
+/// paymaster pays. Presented as a bottom sheet over [WelcomeScreen] rather
+/// than a full page: it is one short action, not a multi-step flow, and a
+/// sheet lets the person see (and dismiss back to) the welcome screen behind
+/// it instead of a route stack getting deeper.
+Future<void> showPasskeySheet(BuildContext context, AppConfig config) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    useSafeArea: true,
+    builder: (_) => _PasskeySheet(config: config),
+  );
+}
+
+class _PasskeySheet extends StatefulWidget {
+  const _PasskeySheet({required this.config});
 
   final AppConfig config;
 
   @override
-  State<OnboardingScreen> createState() => _OnboardingScreenState();
+  State<_PasskeySheet> createState() => _PasskeySheetState();
 }
 
-class _OnboardingScreenState extends State<OnboardingScreen> {
+class _PasskeySheetState extends State<_PasskeySheet> {
   late final PasskeyController _controller = PasskeyController(
     config: widget.config,
   );
+
+  // The sheet closes itself the instant the account exists — navigation
+  // happens from inside the listener, not a button, so nothing has to be
+  // tapped twice. Guarded so a rebuild can't re-trigger it.
+  bool _navigated = false;
 
   @override
   void initState() {
@@ -32,28 +50,50 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     // Ask up front, so an unsupported device says so before the user commits
     // to a flow that cannot finish.
     _controller.checkAvailability();
-    // Needs no auth, so this loads immediately — the amount field can show
-    // a real token symbol from the first frame, not a bare number.
+    // Needs no auth, so this loads immediately.
     _controller.loadConfig();
   }
 
-  void _onChanged() => setState(() {});
+  void _onChanged() {
+    setState(() {});
+    final account = _controller.state.account;
+    if (account != null && !_navigated) {
+      _navigated = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _enterApp(account));
+    }
+  }
+
+  void _enterApp(AccountInfo account) {
+    if (!mounted) return;
+    // Same Navigator both calls: close the sheet, then replace the welcome
+    // page underneath it with AppShell, so the back button from AppShell
+    // never lands back on either.
+    final navigator = Navigator.of(context);
+    navigator.pop();
+    navigator.pushReplacement(
+      MaterialPageRoute(
+        builder:
+            (_) => AppShell(
+              config: widget.config,
+              account: account,
+              onLogout:
+                  () => navigator.pushAndRemoveUntil(
+                    MaterialPageRoute(
+                      builder: (_) => WelcomeScreen(config: widget.config),
+                    ),
+                    (route) => false,
+                  ),
+            ),
+      ),
+    );
+  }
 
   @override
   void dispose() {
     _controller.removeListener(_onChanged);
     _controller.dispose();
-    _recipient.dispose();
-    _amount.dispose();
     super.dispose();
   }
-
-  // Prefilled so the demo is one tap. The dead address is a conventional
-  // sink: whatever lands there is visibly gone, which is the point.
-  final _recipient = TextEditingController(
-    text: '0x000000000000000000000000000000000000dEaD',
-  );
-  final _amount = TextEditingController(text: '1');
 
   @override
   Widget build(BuildContext context) {
@@ -62,40 +102,45 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final registered = state.registered;
     final account = state.account;
 
-    return Scaffold(
-      body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(24, 32, 24, 40),
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+        24,
+        0,
+        24,
+        24 + MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              'Sokoni',
-              style: theme.textTheme.displaySmall?.copyWith(
+              'Your account is your fingerprint',
+              style: theme.textTheme.titleLarge?.copyWith(
                 fontWeight: FontWeight.w700,
               ),
             ),
             const SizedBox(height: 6),
             Text(
-              'Your account is your fingerprint.',
-              style: theme.textTheme.titleMedium?.copyWith(
+              'A key is generated inside this device’s secure hardware. It '
+              'never leaves, so there is nothing to write down and nothing '
+              'to lose — unlike a seed phrase.',
+              style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
+                height: 1.45,
               ),
             ),
-            const SizedBox(height: 28),
+            const SizedBox(height: 20),
 
             _NetworkBanner(config: widget.config),
             const SizedBox(height: 20),
 
             if (state.available == false) const _UnsupportedNotice(),
 
-            _Step(
-              index: 1,
-              title: 'Create a passkey',
-              body:
-                  'A key is generated inside this device’s secure hardware. '
-                  'It never leaves, so there is nothing to write down and '
-                  'nothing to lose — unlike a seed phrase.',
-              done: registered != null,
-              action: FilledButton.icon(
+            SizedBox(
+              width: double.infinity,
+              height: 56,
+              child: FilledButton.icon(
                 onPressed:
                     state.isBusy || state.available == false
                         ? null
@@ -106,6 +151,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         : const Icon(Icons.fingerprint),
                 label: Text(
                   registered == null ? 'Create passkey' : 'Create another',
+                  style: const TextStyle(fontSize: 16),
                 ),
               ),
             ),
@@ -126,93 +172,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               ),
             ],
 
-            if (account != null) ...[
-              const SizedBox(height: 16),
-              _AccountCard(account: account),
-              const SizedBox(height: 12),
-              OutlinedButton.icon(
-                onPressed:
-                    () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => MarketsScreen(config: widget.config),
-                      ),
-                    ),
-                icon: const Icon(Icons.candlestick_chart_outlined),
-                label: const Text('Continue to markets'),
-              ),
-            ],
-
-            const SizedBox(height: 24),
-
-            _Step(
-              index: 2,
-              title: 'Move a token with it',
-              body:
-                  'Your fingerprint authorises it — no password, no seed '
-                  'phrase. The gateway covers the network fee, so the '
-                  'account never needs to hold any MON of its own.',
-              done: state.op?.landed ?? false,
-              action: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  TextField(
-                    controller: _recipient,
-                    enabled: account != null && !state.isBusy,
-                    autocorrect: false,
-                    enableSuggestions: false,
-                    style: tabularFigures,
-                    decoration: const InputDecoration(
-                      labelText: 'Recipient',
-                      hintText: '0x…',
-                      isDense: true,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _amount,
-                    enabled: account != null && !state.isBusy,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    style: tabularFigures,
-                    decoration: InputDecoration(
-                      labelText: 'Amount',
-                      suffixText: state.token?.symbol,
-                      isDense: true,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  FilledButton.tonalIcon(
-                    onPressed:
-                        state.isBusy || account == null
-                            ? null
-                            : () => _controller.send(
-                              to: _recipient.text.trim(),
-                              amount: _amount.text.trim(),
-                            ),
-                    icon:
-                        state.stage == PasskeyStage.sending
-                            ? const _Spinner()
-                            : const Icon(Icons.send_outlined),
-                    label: const Text('Sign and send'),
-                  ),
-                ],
-              ),
-            ),
-
-            if (state.op != null) ...[
-              const SizedBox(height: 16),
-              _OpCard(op: state.op!),
-            ],
-
-            if (state.lastAssertion != null) ...[
-              const SizedBox(height: 16),
-              _AssertionCard(assertion: state.lastAssertion!),
-            ],
-
             if (state.error != null) ...[
-              const SizedBox(height: 24),
+              const SizedBox(height: 20),
               _ErrorNotice(message: state.error!),
             ],
           ],
@@ -265,76 +226,6 @@ class _NetworkBanner extends StatelessWidget {
   }
 }
 
-class _Step extends StatelessWidget {
-  const _Step({
-    required this.index,
-    required this.title,
-    required this.body,
-    required this.action,
-    required this.done,
-  });
-
-  final int index;
-  final String title;
-  final String body;
-  final Widget action;
-  final bool done;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: 26,
-          height: 26,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color:
-                done
-                    ? theme.colorScheme.primary
-                    : theme.colorScheme.surfaceContainerHighest,
-          ),
-          child:
-              done
-                  ? Icon(
-                    Icons.check,
-                    size: 16,
-                    color: theme.colorScheme.onPrimary,
-                  )
-                  : Text('$index', style: theme.textTheme.labelMedium),
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                body,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                  height: 1.45,
-                ),
-              ),
-              const SizedBox(height: 12),
-              action,
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
 class _KeyCard extends StatelessWidget {
   const _KeyCard({required this.registered});
   final RegisteredPasskey registered;
@@ -357,80 +248,10 @@ class _KeyCard extends StatelessWidget {
   }
 }
 
-class _AssertionCard extends StatelessWidget {
-  const _AssertionCard({required this.assertion});
-  final PasskeyAssertion assertion;
-
-  @override
-  Widget build(BuildContext context) {
-    return _Disclosure(
-      summary: 'Signed',
-      icon: Icons.check_circle_outline,
-      child: _DataCard(
-        title: 'Signature',
-        subtitle:
-            's is normalised to the low half — Monad’s precompile accepts '
-            'both forms, so the account rejects the malleable one.',
-        rows: {
-          'r': assertion.signature.rHex,
-          's': assertion.signature.sHex,
-          'challenge offset': '${assertion.challengeIndex}',
-        },
-      ),
-    );
-  }
-}
-
-class _AccountCard extends StatelessWidget {
-  const _AccountCard({required this.account});
-  final AccountInfo account;
-
-  @override
-  Widget build(BuildContext context) {
-    return _DataCard(
-      title: 'Your account',
-      subtitle:
-          account.deployed
-              ? 'Live on-chain. It never needs MON — Sokoni covers the fee.'
-              : 'This address is ready to receive funds now, even though '
-                  'nothing is on-chain yet. Your first transfer creates it.',
-      rows: {'address': account.address},
-    );
-  }
-}
-
-class _OpCard extends StatelessWidget {
-  const _OpCard({required this.op});
-  final OpStatus op;
-
-  @override
-  Widget build(BuildContext context) {
-    return _DataCard(
-      title: switch (op.status) {
-        'landed' => 'Landed on-chain',
-        'reverted' => 'Reached the chain, but reverted',
-        'submitted' => 'Submitted — waiting for a block',
-        'expired' => 'Expired before it was signed',
-        _ => 'Prepared',
-      },
-      subtitle:
-          op.landed
-              ? 'Gas was paid by the Sokoni paymaster, not by you.'
-              : 'The Sokoni paymaster pays the gas.',
-      rows: {
-        if (op.userOpHash != null) 'userOpHash': op.userOpHash!,
-        if (op.txHash != null) 'transaction': op.txHash!,
-        if (op.blockNumber != null) 'block': '${op.blockNumber}',
-        if (op.reason != null) 'reason': op.reason!,
-      },
-    );
-  }
-}
-
 /// A card that starts collapsed behind one reassuring line, for detail that
 /// proves something to a reviewer but would only alarm a first-time user —
-/// raw key material, a signature's r/s. Tapping it open costs one gesture;
-/// leaving it open by default costs a calm first impression.
+/// raw key material. Tapping it open costs one gesture; leaving it open by
+/// default costs a calm first impression.
 class _Disclosure extends StatelessWidget {
   const _Disclosure({
     required this.summary,

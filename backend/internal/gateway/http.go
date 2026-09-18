@@ -25,6 +25,9 @@ const maxBody = 64 << 10
 //	POST /v1/ops                           prepare an operation, receive its challenge
 //	POST /v1/ops/{id}/submit               return the signed assertion
 //	GET  /v1/ops/{id}                      poll for the outcome
+//	POST /v1/mera/accounts                 register a Mera-derived owner, learn its account address
+//	POST /v1/mera/ops                      prepare an operation for a Mera-owned account
+//	POST /v1/mera/ops/{id}/submit          return the signed ECDSA signature
 //	GET  /v1/markets                       enabled markets
 //	GET  /v1/markets/{symbol}/candles      candle history (interval query param, seconds)
 //	GET  /v1/markets/{symbol}/trades       recent market-wide trades (limit query param)
@@ -47,6 +50,9 @@ func NewHandler(svc *Service, hub *Hub, log *slog.Logger) http.Handler {
 	mux.HandleFunc("POST /v1/ops", h.prepare)
 	mux.HandleFunc("POST /v1/ops/{id}/submit", h.submit)
 	mux.HandleFunc("GET /v1/ops/{id}", h.status)
+	mux.HandleFunc("POST /v1/mera/accounts", h.registerMera)
+	mux.HandleFunc("POST /v1/mera/ops", h.prepareMera)
+	mux.HandleFunc("POST /v1/mera/ops/{id}/submit", h.submitMera)
 	mux.HandleFunc("GET /v1/markets", h.markets)
 	mux.HandleFunc("GET /v1/markets/{symbol}/candles", h.candles)
 	mux.HandleFunc("GET /v1/markets/{symbol}/trades", h.trades)
@@ -134,6 +140,63 @@ func (h *handler) submit(w http.ResponseWriter, r *http.Request) {
 		R:                 rr,
 		S:                 ss,
 	})
+	h.respond(w, http.StatusAccepted, view, err)
+}
+
+// ----------------------------------------------------------- mera (Option 2)
+
+func (h *handler) registerMera(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Owner string `json:"owner"`
+	}
+	if !h.decode(w, r, &body) {
+		return
+	}
+	if !common.IsHexAddress(body.Owner) {
+		h.fail(w, fail(KindInvalid, "bad_owner", "owner must be a 0x address", nil))
+		return
+	}
+	view, err := h.svc.RegisterMera(r.Context(), common.HexToAddress(body.Owner))
+	h.respond(w, http.StatusCreated, view, err)
+}
+
+func (h *handler) prepareMera(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Owner  string `json:"owner"`
+		Intent Intent `json:"intent"`
+	}
+	if !h.decode(w, r, &body) {
+		return
+	}
+	if !common.IsHexAddress(body.Owner) {
+		h.fail(w, fail(KindInvalid, "bad_owner", "owner must be a 0x address", nil))
+		return
+	}
+	view, err := h.svc.PrepareMera(r.Context(), common.HexToAddress(body.Owner), body.Intent)
+	h.respond(w, http.StatusCreated, view, err)
+}
+
+// submitMera accepts a 65-byte (r, s, v) signature as 0x-hex — exactly what
+// most Ethereum signing libraries, including the Dart one the client uses,
+// already produce, with no WebAuthn-shaped mapping layer needed.
+func (h *handler) submitMera(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Owner     string `json:"owner"`
+		Signature string `json:"signature"`
+	}
+	if !h.decode(w, r, &body) {
+		return
+	}
+	if !common.IsHexAddress(body.Owner) {
+		h.fail(w, fail(KindInvalid, "bad_owner", "owner must be a 0x address", nil))
+		return
+	}
+	sig, okSig := parseBytes(body.Signature)
+	if !okSig {
+		h.fail(w, fail(KindInvalid, "bad_signature", "signature must be 0x-prefixed hex", nil))
+		return
+	}
+	view, err := h.svc.SubmitMera(r.Context(), r.PathValue("id"), common.HexToAddress(body.Owner), sig)
 	h.respond(w, http.StatusAccepted, view, err)
 }
 

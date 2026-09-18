@@ -28,6 +28,24 @@ type Accounts interface {
 	Put(ctx context.Context, c Credential) error
 }
 
+// MeraCredential binds an ECDSA owner address to the account it owns —
+// the Option 2 counterpart to Credential. The encrypted vault that unlocks
+// this key never reaches the gateway; it stays in the phone's own secure
+// storage, gated by the passkey used to derive it. Owner is the whole
+// identity here, so there is no separate credential id.
+type MeraCredential struct {
+	Owner     common.Address
+	Address   common.Address
+	CreatedAt time.Time
+}
+
+// MeraAccounts persists Mera-owned credentials, with the same insert-if-
+// absent contract as Accounts.
+type MeraAccounts interface {
+	Get(ctx context.Context, owner common.Address) (MeraCredential, bool, error)
+	Put(ctx context.Context, c MeraCredential) error
+}
+
 // Pending is an operation between prepare and landing.
 type Pending struct {
 	ID           string
@@ -76,6 +94,31 @@ func (m *MemoryAccounts) Put(_ context.Context, c Credential) error {
 	defer m.mu.Unlock()
 	if _, exists := m.byID[c.ID]; !exists {
 		m.byID[c.ID] = c
+	}
+	return nil
+}
+
+type MemoryMeraAccounts struct {
+	mu     sync.RWMutex
+	byAddr map[common.Address]MeraCredential
+}
+
+func NewMemoryMeraAccounts() *MemoryMeraAccounts {
+	return &MemoryMeraAccounts{byAddr: make(map[common.Address]MeraCredential)}
+}
+
+func (m *MemoryMeraAccounts) Get(_ context.Context, owner common.Address) (MeraCredential, bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	c, ok := m.byAddr[owner]
+	return c, ok, nil
+}
+
+func (m *MemoryMeraAccounts) Put(_ context.Context, c MeraCredential) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.byAddr[c.Owner]; !exists {
+		m.byAddr[c.Owner] = c
 	}
 	return nil
 }
