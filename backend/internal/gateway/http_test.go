@@ -214,7 +214,11 @@ func TestCandlesRejectsUnsupportedInterval(t *testing.T) {
 	r, srv := newServer(t)
 	r.markets.markets = []store.Market{{Symbol: "MON-USDC"}}
 
-	status, body := do(t, "GET", srv.URL+"/v1/markets/MON-USDC/candles?interval=300", nil)
+	// 900 (15m) is one of Kuru's own documented granularities but not one
+	// store.ApplyBlocks populates (candleIntervalsS: 60/300/3600/86400) --
+	// still a genuinely unsupported value, unlike 300 which this test used
+	// before multi-interval candles existed.
+	status, body := do(t, "GET", srv.URL+"/v1/markets/MON-USDC/candles?interval=900", nil)
 	if status != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400: %v", status, body)
 	}

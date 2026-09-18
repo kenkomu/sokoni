@@ -129,11 +129,23 @@ type enabledMarket struct {
 	quoteToken     []byte
 	baseDec        int32
 	pricePrecision int64
+	sizePrecision  int64
 }
 
-// candleIntervalS is the one bucket size populated for now. interval_s is a
-// column, not a constant, precisely so a second interval is a new row shape,
-// not a schema change -- this just doesn't need a second interval yet.
+// candleIntervalsS are every bucket size populated, chosen to match the
+// trade screen's four time-range tabs (1H/6H/24H/All) at a readable
+// resolution each -- e.g. 1H showing 60 one-minute candles, not 60 daily
+// ones. Every value here is one Kuru's own candlestick API documents too
+// (docs.kuru.io/api-reference/market-data/get-candlestick-data: 1m, 5m, 15m,
+// 30m, 1h, 4h, 1d, 1w), trimmed to the four this app's UI actually offers.
+// interval_s is a column, not a constant, precisely so adding one here is a
+// new row shape, not a schema change.
+var candleIntervalsS = []int{60, 300, 3600, 86400}
+
+// candleIntervalS is the 1-minute bucket, called out on its own only
+// because the test suite needed one concrete interval to assert against —
+// applyTrade itself always writes every interval in candleIntervalsS above,
+// never just this one.
 const candleIntervalS = 60
 
 // applyTrades pulls one eth_getLogs window per enabled market (not per
@@ -152,7 +164,7 @@ func (s *Store) applyTrades(ctx context.Context, tx pgx.Tx, headers []chain.Bloc
 	}
 
 	rows, err := tx.Query(ctx,
-		`select symbol, venue_ref, base_token, quote_token, base_dec, price_precision from markets
+		`select symbol, venue_ref, base_token, quote_token, base_dec, price_precision, size_precision from markets
 		 where enabled and venue_ref is not null`)
 	if err != nil {
 		return fmt.Errorf("load markets: %w", err)
@@ -160,7 +172,7 @@ func (s *Store) applyTrades(ctx context.Context, tx pgx.Tx, headers []chain.Bloc
 	var markets []enabledMarket
 	for rows.Next() {
 		var m enabledMarket
-		if err := rows.Scan(&m.symbol, &m.venueRef, &m.baseToken, &m.quoteToken, &m.baseDec, &m.pricePrecision); err != nil {
+		if err := rows.Scan(&m.symbol, &m.venueRef, &m.baseToken, &m.quoteToken, &m.baseDec, &m.pricePrecision, &m.sizePrecision); err != nil {
 			rows.Close()
 			return fmt.Errorf("scan market: %w", err)
 		}
@@ -201,19 +213,31 @@ func (s *Store) applyTrades(ctx context.Context, tx pgx.Tx, headers []chain.Bloc
 	return nil
 }
 
-// applyTrade scales one Trade, writes its fill, and -- only for a new fill,
-// never a replayed one -- its ledger legs and candle bucket. Scaling is
-// inferred, not vendor-documented -- see internal/venue's package doc for
-// the live OrderCreated log this was checked against (its `size` field was
-// an exact multiple of sizePrecision and its `price` field an exact
-// multiple of tickSize, and both sat inside [minSize,maxSize] / the
-// pricePrecision range with no further rescaling needed), and the same
-// caveat that applies to Trade's field layout applies here: treat it as
-// provisional until a real Trade log is captured and checked the same way.
+// applyTrade scales one Trade and writes its fill, and -- only for a new
+// fill, never a replayed one -- its ledger legs and candle bucket.
+//
+// Both scalings below are now confirmed against Kuru's own OrderBook.sol
+// (github.com/Kuru-Labs/Kuru-contracts-dex-public), not inferred from
+// docs.kuru.io prose -- see migrations/0006 and venue/kuru.go's package doc
+// for what was actually wrong before and how each was caught. In short:
+// price divides by a fixed contract-wide constant (vaultPricePrecision,
+// 1e18), never the market's own pricePrecision -- that's what
+// OrderCreated's price divides by instead, a different event with a
+// deceptively similar-looking price field. And size (FilledSize here) is in
+// sizePrecision units, not raw base-asset wei -- base_dec never enters the
+// qty formula at all, because it cancels out of the round trip through wei
+// and back (see migrations/0006's comment for the algebra).
+//
+// kuruVaultPricePrecision: confirmed against the first real Trade this
+// codebase ever saw (tx 0x770da5cda...5ae632e, block 105832470): raw price
+// 23788000000000000 / 1e18 = 0.023788, matching MON's real market price;
+// dividing by pricePrecision (1e8) instead gave 237,580,000 -- nonsense for
+// a $0.02 token.
+var kuruVaultPricePrecision = big.NewInt(1_000_000_000_000_000_000)
+
 func (s *Store) applyTrade(ctx context.Context, tx pgx.Tx, m enabledMarket, t *venue.Trade, blockTime time.Time) error {
-	px := new(big.Rat).SetFrac(new(big.Int).SetInt64(int64(t.Price)), big.NewInt(m.pricePrecision))
-	baseUnit := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(m.baseDec)), nil)
-	qty := new(big.Rat).SetFrac(t.FilledSize, baseUnit)
+	px := new(big.Rat).SetFrac(t.Price, kuruVaultPricePrecision)
+	qty := new(big.Rat).SetFrac(t.FilledSize, big.NewInt(m.sizePrecision))
 
 	// IsBuy is the taker's direction. fills.side records the taker's side
 	// regardless of which party (if either) turned out to be ours -- a single
@@ -278,8 +302,10 @@ func (s *Store) applyTrade(ctx context.Context, tx pgx.Tx, m enabledMarket, t *v
 		}
 	}
 
-	if err := s.upsertCandle(ctx, tx, m.symbol, px, qty, blockTime); err != nil {
-		return fmt.Errorf("upsert candle: %w", err)
+	for _, intervalS := range candleIntervalsS {
+		if err := s.upsertCandle(ctx, tx, m.symbol, intervalS, px, qty, blockTime); err != nil {
+			return fmt.Errorf("upsert %ds candle: %w", intervalS, err)
+		}
 	}
 	return nil
 }
@@ -338,15 +364,15 @@ func assetSymbol(addr []byte) string {
 	return hexAddr
 }
 
-// upsertCandle folds one trade into its candleIntervalS bucket. open is set
+// upsertCandle folds one trade into its intervalS bucket. open is set
 // only by the first insert into a bucket (ON CONFLICT never touches it);
 // high/low/close/volume/trade_count fold in on every trade after, which is
 // correct as long as trades are applied in chronological order -- guaranteed
 // both within one window (the node returns logs for one address in log
 // order) and across windows (the indexer applies windows strictly in
 // sequence).
-func (s *Store) upsertCandle(ctx context.Context, tx pgx.Tx, market string, px, qty *big.Rat, blockTime time.Time) error {
-	bucket := blockTime.Truncate(candleIntervalS * time.Second)
+func (s *Store) upsertCandle(ctx context.Context, tx pgx.Tx, market string, intervalS int, px, qty *big.Rat, blockTime time.Time) error {
+	bucket := blockTime.Truncate(time.Duration(intervalS) * time.Second)
 	pxStr := px.FloatString(18)
 	qtyStr := qty.FloatString(18)
 	_, err := tx.Exec(ctx, `
@@ -358,7 +384,7 @@ func (s *Store) upsertCandle(ctx context.Context, tx pgx.Tx, market string, px, 
 		      close_px    = excluded.close_px,
 		      volume      = candles.volume + excluded.volume,
 		      trade_count = candles.trade_count + 1`,
-		market, candleIntervalS, bucket, pxStr, qtyStr)
+		market, intervalS, bucket, pxStr, qtyStr)
 	return err
 }
 

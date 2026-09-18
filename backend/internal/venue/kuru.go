@@ -16,13 +16,19 @@
 // indexing even though the type list it gave was right.
 //
 // DecodeOrderCreated below matches what was actually observed on chain.
-// DecodeTrade does not have that luxury — no live Trade event was found in
-// the ranges searched on 2026-09-14 — so it is decoded on the same
-// topic0-only shape OrderCreated turned out to have, as the best-supported
-// assumption available, not as something independently confirmed. Treat it
-// as provisional until a real Trade log is captured and checked the same
-// way; TestDecodeTrade documents exactly this gap rather than hiding it
-// behind a passing test built from the same assumption it exists to check.
+//
+// DecodeTrade's shape is now confirmed against Kuru's own public source
+// (github.com/Kuru-Labs/Kuru-contracts-dex-public, contracts/interfaces/
+// IOrderBook.sol, checked 2026-09-18): `event Trade(uint40 orderId, address
+// makerAddress, bool isBuy, uint256 price, uint96 updatedSize, address
+// takerAddress, address txOrigin, uint96 filledSize)`. The signature this
+// package had before that — price as uint32, copied from docs.kuru.io's
+// prose the same way OrderCreated's indexing claim above turned out wrong —
+// hashed to a *different* topic0 than the real event ever emits, so it
+// would have matched zero live Trade logs, forever, with no error: an
+// unmatched topic0 just means "not a Trade log" to the log-scanning code
+// upstream, not "this decoder is broken". Caught before any real Trade had
+// ever happened on the watched markets to expose it.
 package venue
 
 import (
@@ -39,7 +45,7 @@ import (
 // internal/account.selector for the reasoning: a hand-copied hash is a
 // silent misdial.
 var (
-	TradeTopic         = eventTopic("Trade(uint40,address,bool,uint32,uint96,address,address,uint96)")
+	TradeTopic         = eventTopic("Trade(uint40,address,bool,uint256,uint96,address,address,uint96)")
 	OrderCreatedTopic  = eventTopic("OrderCreated(uint40,address,uint96,uint32,bool)")
 	OrderCanceledTopic = eventTopic("OrderCanceled(uint40,address,uint96,uint32,bool)")
 )
@@ -50,14 +56,15 @@ func eventTopic(signature string) string {
 
 // Trade is one match on a Kuru order book.
 //
-// Field order and types follow docs.kuru.io/contracts/OrderBook; the
-// indexed/non-indexed split is inferred, not confirmed — see the package
-// doc.
+// Field order and types match Kuru's own IOrderBook.sol — see the package
+// doc. Price is a genuine uint256 on this event (unlike OrderCreated's,
+// which really is uint32) — Kuru's own source has both in the same file, so
+// this isn't a typo to reconcile away.
 type Trade struct {
 	OrderID     uint64
 	Maker       common.Address
 	IsBuy       bool
-	Price       uint32
+	Price       *big.Int
 	UpdatedSize *big.Int
 	Taker       common.Address
 	Origin      common.Address
@@ -157,15 +164,11 @@ func DecodeTrade(log chain.Log) (*Trade, error) {
 	if err != nil {
 		return nil, fmt.Errorf("filledSize: %w", err)
 	}
-	if !price.IsUint64() || price.Uint64() > 0xFFFFFFFF {
-		return nil, fmt.Errorf("price %s does not fit uint32", price)
-	}
-
 	return &Trade{
 		OrderID:     orderID.Uint64(),
 		Maker:       maker,
 		IsBuy:       isBuy,
-		Price:       uint32(price.Uint64()),
+		Price:       price,
 		UpdatedSize: updatedSize,
 		Taker:       taker,
 		Origin:      origin,

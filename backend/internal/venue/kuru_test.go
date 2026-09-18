@@ -34,8 +34,8 @@ func TestTopicsAreComputedNotPasted(t *testing.T) {
 	if OrderCreatedTopic != "0xb81bbaf150467ef3096ed6220cb963abc169bffd2eb88f26c47359ef344cf94c" {
 		t.Errorf("OrderCreatedTopic = %s, want the value confirmed live on 2026-09-14", OrderCreatedTopic)
 	}
-	if TradeTopic != "0xf701de798e9614f3caea30399a51e3355d32e7a96bf4656d8045a6792bffa40f" {
-		t.Errorf("TradeTopic = %s", TradeTopic)
+	if TradeTopic != "0xf16924fba1c18c108912fcacaac7450c98eb3f2d8c0a3cdf3df7066c08f21581" {
+		t.Errorf("TradeTopic = %s, want the value confirmed against Kuru's own IOrderBook.sol on 2026-09-18", TradeTopic)
 	}
 }
 
@@ -101,13 +101,12 @@ func TestDecodeOrderCreatedRejectsNoTopics(t *testing.T) {
 	}
 }
 
-// Trade has no live fixture yet — see the package doc for why. This test
-// exercises the decoder against a synthetic log built from the field order
-// and topic0 the docs give, so the arithmetic is at least self-consistent;
-// it is not evidence the shape is correct. Replace with a real captured log
-// the moment one is found, the same way TestDecodeOrderCreatedAgainstARealLog
-// already is.
-func TestDecodeTradeIsUnconfirmedByALiveLog(t *testing.T) {
+// Trade's shape is confirmed against Kuru's own IOrderBook.sol (see the
+// package doc), but no live Trade log had happened on either watched market
+// as of 2026-09-18, so this is still a synthetic log rather than a captured
+// one — same caveat TestDecodeOrderCreatedAgainstARealLog closed for that
+// event. Replace with a real captured log the moment one exists.
+func TestDecodeTradeAgainstTheConfirmedShape(t *testing.T) {
 	maker := common.HexToAddress("0x1111111111111111111111111111111111111a")
 	taker := common.HexToAddress("0x2222222222222222222222222222222222222b")
 	origin := common.HexToAddress("0x3333333333333333333333333333333333333c")
@@ -149,8 +148,8 @@ func TestDecodeTradeIsUnconfirmedByALiveLog(t *testing.T) {
 	if !got.IsBuy {
 		t.Error("isBuy should be true")
 	}
-	if got.Price != 1_000_000 {
-		t.Errorf("price = %d, want 1000000", got.Price)
+	if got.Price.Cmp(big.NewInt(1_000_000)) != 0 {
+		t.Errorf("price = %s, want 1000000", got.Price)
 	}
 	if got.FilledSize.Cmp(big.NewInt(300)) != 0 {
 		t.Errorf("filledSize = %s, want 300", got.FilledSize)

@@ -32,8 +32,11 @@ func TestListMarketsReturnsEnabledOnly(t *testing.T) {
 	if m.TickSize != "0.000001000000000000" {
 		t.Errorf("MON-USDC tick_size = %q, want 0.000001000000000000", m.TickSize)
 	}
-	if m.MinQty != "0.000002000000000000" {
-		t.Errorf("MON-USDC min_qty = %q, want 0.000002000000000000", m.MinQty)
+	// 200 MON, not 0.000002 -- see migrations/0006_kuru_size_precision.sql
+	// for why the original value was wrong (missing the sizePrecision
+	// conversion minSize actually needs).
+	if m.MinQty != "200.000000000000000000" {
+		t.Errorf("MON-USDC min_qty = %q, want 200.000000000000000000", m.MinQty)
 	}
 	if m.PricePrecision != 100000000 {
 		t.Errorf("MON-USDC price_precision = %d, want 100000000", m.PricePrecision)

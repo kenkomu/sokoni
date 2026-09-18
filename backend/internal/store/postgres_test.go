@@ -99,14 +99,25 @@ func testHeader(number uint64) chain.BlockHeader {
 // fills, which key on a fresh random tx_hash, a candle row would otherwise
 // accumulate trade_count across separate `go test` invocations instead of
 // each run starting clean.
+// Deletes every interval's bucket a trade at this header would touch, not
+// just the 1-minute one -- applyTrade writes all of candleIntervalsS from a
+// single trade, so leaving the coarser buckets behind lets one test's
+// candle bleed into another's if their block timestamps (all derived from
+// the same base time in testHeader) happen to fall in the same 5m/1h/1d
+// window, which most of them do.
 func cleanupCandle(t *testing.T, s *Store, market string, h chain.BlockHeader) {
 	t.Helper()
-	bucket := time.Unix(int64(h.Timestamp), 0).UTC().Truncate(candleIntervalS * time.Second)
-	t.Cleanup(func() {
-		s.pool.Exec(context.Background(),
-			`delete from candles where market = $1 and interval_s = $2 and bucket_ts = $3`,
-			market, candleIntervalS, bucket)
-	})
+	ts := time.Unix(int64(h.Timestamp), 0).UTC()
+	for _, intervalS := range candleIntervalsS {
+		bucket := ts.Truncate(time.Duration(intervalS) * time.Second)
+		t.Cleanup(func(intervalS int, bucket time.Time) func() {
+			return func() {
+				s.pool.Exec(context.Background(),
+					`delete from candles where market = $1 and interval_s = $2 and bucket_ts = $3`,
+					market, intervalS, bucket)
+			}
+		}(intervalS, bucket))
+	}
 }
 
 func TestApplyBlocksDecodesAndInsertsAFill(t *testing.T) {
@@ -116,7 +127,7 @@ func TestApplyBlocksDecodesAndInsertsAFill(t *testing.T) {
 
 	txHash := "0x" + randHex(t)
 	s.WithVenueClient(&fakeVenue{logs: []chain.Log{
-		tradeLog(t, 100, 2_331_800, 857_810_000_000_000, true, txHash, 0),
+		tradeLog(t, 100, 23_318_000_000_000_000, 8_578_100, true, txHash, 0),
 	}})
 
 	headers := []chain.BlockHeader{testHeader(100)}
@@ -143,11 +154,11 @@ func TestApplyBlocksDecodesAndInsertsAFill(t *testing.T) {
 	if side != "buy" {
 		t.Errorf("side = %q, want buy", side)
 	}
-	// price = 2_331_800 / pricePrecision(1e8) = 0.023318
+	// price = 23_318_000_000_000_000 / kuruVaultPricePrecision(1e18) = 0.023318
 	if px != "0.023318000000000000" {
 		t.Errorf("px = %q, want 0.023318000000000000", px)
 	}
-	// filledSize = 857_810_000_000_000 / 10^baseDec(18) = 0.00085781
+	// filledSize = 8_578_100 / sizePrecision(1e10) = 0.00085781
 	if qty != "0.000857810000000000" {
 		t.Errorf("qty = %q, want 0.000857810000000000", qty)
 	}
@@ -189,6 +200,44 @@ func TestApplyBlocksDecodesAndInsertsAFill(t *testing.T) {
 	}
 }
 
+// One trade must land in every interval in candleIntervalsS, not just the
+// 1-minute one every other test in this file checks -- this is what the
+// trade screen's 1H/6H/24H/All tabs actually read from (see mobile's
+// TradeController.loadInitial, which now passes a real interval alongside
+// limit).
+func TestApplyBlocksPopulatesEveryCandleInterval(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	consumer := "test-consumer-" + t.Name()
+
+	txHash := "0x" + randHex(t)
+	s.WithVenueClient(&fakeVenue{logs: []chain.Log{
+		tradeLog(t, 400, 23_318_000_000_000_000, 8_578_100, true, txHash, 0),
+	}})
+
+	headers := []chain.BlockHeader{testHeader(400)}
+	cleanupCandle(t, s, "MON-USDC", headers[0])
+	cp := indexer.Checkpoint{BlockNumber: 400, BlockHash: headers[0].Hash}
+	if err := s.ApplyBlocks(ctx, consumer, headers, cp); err != nil {
+		t.Fatalf("ApplyBlocks: %v", err)
+	}
+
+	for _, intervalS := range candleIntervalsS {
+		bucketTs := time.Unix(int64(headers[0].Timestamp), 0).UTC().Truncate(time.Duration(intervalS) * time.Second)
+		var tradeCount int
+		err := s.pool.QueryRow(ctx,
+			`select trade_count from candles where market = $1 and interval_s = $2 and bucket_ts = $3`,
+			"MON-USDC", intervalS, bucketTs).Scan(&tradeCount)
+		if err != nil {
+			t.Errorf("interval %ds: query candle: %v", intervalS, err)
+			continue
+		}
+		if tradeCount != 1 {
+			t.Errorf("interval %ds: trade_count = %d, want 1", intervalS, tradeCount)
+		}
+	}
+}
+
 func TestApplyBlocksMatchesAKnownAccount(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -209,13 +258,13 @@ func TestApplyBlocksMatchesAKnownAccount(t *testing.T) {
 		s.pool.Exec(context.Background(), `delete from accounts where account_id = $1`, accountID)
 	})
 
-	// price = 100_000_000 / pricePrecision(1e8) = 1.0 USDC per MON.
-	// filledSize = 5_000_000_000_000_000 / 10^baseDec(18) = 0.005 MON.
+	// price = 1_000_000_000_000_000_000 / kuruVaultPricePrecision(1e18) = 1.0 USDC per MON.
+	// filledSize = 50_000_000 / sizePrecision(1e10) = 0.005 MON.
 	// isBuy=false and the taker matched, so our own side is a sell: MON out,
 	// USDC in.
 	txHash := "0x" + randHex(t)
 	s.WithVenueClient(&fakeVenue{logs: []chain.Log{
-		tradeLog(t, 200, 100_000_000, 5_000_000_000_000_000, false, txHash, 0),
+		tradeLog(t, 200, 1_000_000_000_000_000_000, 50_000_000, false, txHash, 0),
 	}})
 
 	headers := []chain.BlockHeader{testHeader(200)}
