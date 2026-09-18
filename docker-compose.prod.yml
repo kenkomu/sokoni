@@ -1,0 +1,108 @@
+# Production deployment (VPS) — extends the dev docker-compose.yml's shape
+# (same Postgres/Redis images) with the two backend processes. Dev's
+# docker-compose.yml stays untouched and keeps working exactly as before for
+# local work; this is a separate file so a `docker compose up` with no -f
+# flag never accidentally deploys to a real domain.
+#
+# No reverse proxy container here on purpose: this VPS already runs a
+# host-level nginx fronting several other apps' subdomains on 80/443
+# (confirmed via /etc/nginx/sites-enabled — api.bitshada.com et al., each
+# proxying to a 127.0.0.1:<port> service, TLS via certbot). A second
+# container trying to bind 80/443 collides with that (this is exactly the
+# "address already in use" this comment is replacing). Gateway instead binds
+# only 127.0.0.1:8082, and an nginx site config on the host (added by hand,
+# see the deploy notes) proxies sokoni.bitshada.com to it the same way the
+# other sites are set up.
+#
+# Usage on the VPS:
+#   docker compose -f docker-compose.prod.yml --env-file .env up -d --build
+#
+# Requires a real .env next to this file (see .env.example — same shape as
+# local dev's .env, but MONAD_RPC_HTTP/BUNDLER_RPC_URL/SOKONI_PAYMASTER etc.
+# should point at whichever network this deploy is actually meant to serve).
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: sokoni
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: sokoni
+    volumes: ["sokoni_pg:/var/lib/postgresql"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sokoni"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:8-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: ["sokoni_redis:/data"]
+    restart: unless-stopped
+
+  migrate:
+    build: ./backend
+    entrypoint: ["/bin/sh", "-c"]
+    # No dedicated migrate binary exists yet (make migrate just loops psql
+    # over the .sql files from the host) — this reproduces that loop inside
+    # the compose network instead, so migrations run against `postgres` by
+    # its service name rather than needing psql on the VPS host at all.
+    command: >
+      "apk add --no-cache postgresql-client >/dev/null &&
+       for f in /migrations/*.sql; do
+         echo applying $$f;
+         PGPASSWORD=$$POSTGRES_PASSWORD psql -h postgres -U sokoni -d sokoni -v ON_ERROR_STOP=1 -f \"$$f\";
+       done"
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - ./backend/migrations:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  gateway:
+    build: ./backend
+    entrypoint: ["/usr/local/bin/gateway"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://sokoni:${POSTGRES_PASSWORD}@postgres:5432/sokoni
+      REDIS_URL: redis://redis:6379
+    # Host-only bind — the host nginx proxies to this, so the container
+    # never needs to be reachable from outside the VPS directly.
+    ports:
+      - "127.0.0.1:8082:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  indexer:
+    build: ./backend
+    entrypoint: ["/usr/local/bin/indexer"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://sokoni:${POSTGRES_PASSWORD}@postgres:5432/sokoni
+      # Deliberately overrides whatever MONAD_RPC_HTTP/WS is in .env: the
+      # indexer reads real market data from mainnet Kuru, independent of
+      # which network the gateway's paymaster/factory (and therefore
+      # MONAD_RPC_HTTP in .env) are deployed on. This mirrors the split
+      # already running in local dev — see backend/migrations/0004's
+      # decision to point market data at mainnet while accounts stay on
+      # testnet until mainnet paymaster/factory exist.
+      MONAD_RPC_HTTP: https://rpc.monad.xyz
+      MONAD_RPC_WS: wss://rpc.monad.xyz
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  sokoni_pg:
+  sokoni_redis:
