@@ -85,6 +85,53 @@ class SokoniApi {
   Future<OpStatus> status(String opId) async =>
       OpStatus.fromJson(await _get('/v1/ops/${Uri.encodeComponent(opId)}'));
 
+  // --------------------------------------------------- mera (Option 2) -----
+  // Same two-round-trip shape as the passkey path above — prepare, sign,
+  // submit — just against /v1/mera/* and keyed by the owner's address
+  // instead of a WebAuthn credential id. gateway.PrepareMera/SubmitMera
+  // return the same PreparedView/SubmittedView shapes as the passkey
+  // endpoints, so PreparedOp/SubmittedOp are reused as-is — but
+  // RegisterMera's MeraAccountView carries "owner", not "credentialId", so
+  // it gets its own [MeraAccountInfo] rather than forcing AccountInfo's
+  // shape onto a response that doesn't have that field.
+
+  /// Learn (or register, on first call) the account this owner key owns.
+  Future<MeraAccountInfo> registerMeraAccount({required String owner}) async =>
+      MeraAccountInfo.fromJson(
+        await _post('/v1/mera/accounts', {'owner': owner}),
+      );
+
+  /// Ask for a transfer, same intent shape as [prepareTransfer].
+  Future<PreparedOp> prepareMeraTransfer({
+    required String owner,
+    required String token,
+    required String to,
+    required String amount,
+  }) async => PreparedOp.fromJson(
+    await _post('/v1/mera/ops', {
+      'owner': owner,
+      'intent': {
+        'kind': 'transfer',
+        'token': token,
+        'to': to,
+        'amount': amount,
+      },
+    }),
+  );
+
+  /// Hand back the 65-byte (r, s, v) ECDSA signature as 0x-hex — exactly what
+  /// [MeraKeyService.sign] produces, no mapping layer in between.
+  Future<SubmittedOp> submitMera({
+    required String opId,
+    required String owner,
+    required Uint8List signature,
+  }) async => SubmittedOp.fromJson(
+    await _post('/v1/mera/ops/${Uri.encodeComponent(opId)}/submit', {
+      'owner': owner,
+      'signature': '0x${_hexEncode(signature)}',
+    }),
+  );
+
   Future<List<MarketInfo>> markets() async {
     final j = await _get('/v1/markets');
     return [
@@ -267,6 +314,30 @@ class AccountInfo {
   final bool deployed;
 }
 
+/// The account a Mera-derived owner key owns — [AccountInfo]'s twin for the
+/// Option 2 path, with `owner` (the ECDSA address) standing in for
+/// `credentialId`.
+class MeraAccountInfo {
+  const MeraAccountInfo({
+    required this.owner,
+    required this.address,
+    required this.deployed,
+  });
+
+  factory MeraAccountInfo.fromJson(Map<String, dynamic> j) => MeraAccountInfo(
+    owner: _str(j, 'owner'),
+    address: _str(j, 'address'),
+    deployed: _bool(j, 'deployed'),
+  );
+
+  final String owner;
+  final String address;
+
+  /// False until the first operation deploys it. The address is valid either
+  /// way.
+  final bool deployed;
+}
+
 class PreparedOp {
   const PreparedOp({
     required this.opId,
@@ -378,6 +449,10 @@ class MarketInfo {
   /// Decimal strings, per core/money.dart — never parsed as a double.
   final String tickSize;
   final String minQty;
+
+  /// "MON" out of "MON-AUSD" — for display, where [baseToken] (a contract
+  /// address) would be meaningless.
+  String get baseSymbol => symbol.split('-').first;
 }
 
 class Candle {
@@ -442,6 +517,9 @@ class MarketTrade {
   final int blockNumber;
   final String txHash;
 }
+
+String _hexEncode(Uint8List b) =>
+    b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
 
 String _str(Map<String, dynamic> j, String key) {
   final v = j[key];

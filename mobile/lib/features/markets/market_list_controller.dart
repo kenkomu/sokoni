@@ -1,33 +1,35 @@
 import 'package:flutter/foundation.dart';
 
 import '../../core/config.dart';
+import '../../core/demo_mode.dart';
 import '../../data/api/sokoni_api.dart';
+import '../../data/repositories/demo_market_data.dart';
+import '../../data/repositories/market_summary.dart';
 import '../onboarding/passkey_controller.dart' show describeFailure;
 
 @immutable
 class MarketListState {
-  const MarketListState({this.markets, this.loading = false, this.error});
+  const MarketListState({this.summaries, this.loading = false, this.error});
 
   /// Null until the first load completes (successfully or not).
-  final List<MarketInfo>? markets;
+  final List<MarketSummary>? summaries;
   final bool loading;
   final String? error;
 
   MarketListState copyWith({
-    List<MarketInfo>? markets,
+    List<MarketSummary>? summaries,
     bool? loading,
     String? error,
     bool clearError = false,
   }) => MarketListState(
-    markets: markets ?? this.markets,
+    summaries: summaries ?? this.summaries,
     loading: loading ?? this.loading,
     error: clearError ? null : (error ?? this.error),
   );
 }
 
-/// Static market metadata only — symbol, tick size, min qty. Live prices are
-/// the trade screen's job (one market at a time); this screen just needs to
-/// be a fast, simple list to tap into one.
+/// Every market plus its latest candle — the same [MarketSummary] shape Home
+/// uses, so a price/change shown here and on Home never disagree.
 class MarketListController extends ChangeNotifier {
   MarketListController({required AppConfig config, SokoniApi? api})
     : _api = api ?? SokoniApi(baseUrl: config.apiBaseUrl);
@@ -51,10 +53,14 @@ class MarketListController extends ChangeNotifier {
   }
 
   Future<void> load() async {
+    if (demoModeEnabled.value) {
+      _set(MarketListState(summaries: demoMarketSummaries(), loading: false));
+      return;
+    }
     _set(_state.copyWith(loading: true, clearError: true));
     try {
-      final markets = await _api.markets();
-      _set(MarketListState(markets: markets, loading: false));
+      final summaries = await fetchMarketSummaries(_api);
+      _set(MarketListState(summaries: summaries, loading: false));
     } catch (e) {
       _set(_state.copyWith(loading: false, error: describeFailure(e)));
     }

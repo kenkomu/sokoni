@@ -153,6 +153,62 @@ void main() {
     expect(gw.count('GET', '/v1/markets/MON-USDC/candles'), 2);
   });
 
+  test(
+    'switching time range subscribes to the new interval and ignores '
+    'pushes for the one left behind',
+    () async {
+      final gw = _gateway();
+      final channel = FakeWebSocketChannel();
+      final c = TradeController(
+        config: _config,
+        symbol: 'MON-USDC',
+        api: gw.api(),
+        stream: MarketStream(
+          'ws://gateway.test/v1/stream',
+          channelFactory: (_) => channel,
+        ),
+      );
+      await c.loadInitial();
+      c.subscribeLive();
+      expect(c.state.candleInterval, 60);
+
+      // Switch to the 24H tab (interval 3600) — there is no unsubscribe, so
+      // this only adds a second channel.
+      await c.loadInitial(interval: 3600, limit: 24);
+      expect(c.state.candleInterval, 3600);
+
+      // A push for the interval just left behind (60) must not touch state
+      // shown for 3600 — the old channel keeps delivering, nothing tells the
+      // server to stop.
+      channel.pushFromServer(
+        jsonEncode({
+          'seq': 1,
+          'ch': 'candles:MON-USDC:60',
+          'type': 'candle',
+          'data': _candlesBody(close: '9.9')['candles']![0],
+        }),
+      );
+      await pumpEventQueue();
+      expect(
+        c.state.candles!.last.close,
+        isNot('9.9'),
+        reason: 'a stale-interval push must be ignored',
+      );
+
+      // A push for the interval actually selected does apply.
+      channel.pushFromServer(
+        jsonEncode({
+          'seq': 2,
+          'ch': 'candles:MON-USDC:3600',
+          'type': 'candle',
+          'data': _candlesBody(close: '4.2')['candles']![0],
+        }),
+      );
+      await pumpEventQueue();
+      expect(c.state.candles!.last.close, '4.2');
+    },
+  );
+
   test('dispose then a late message does not throw', () async {
     final gw = _gateway();
     final channel = FakeWebSocketChannel();

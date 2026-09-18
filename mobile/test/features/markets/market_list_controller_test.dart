@@ -12,34 +12,40 @@ const _config = AppConfig(
 );
 
 void main() {
-  test('load populates markets from the gateway', () async {
+  test('load populates markets with their latest candle', () async {
     final gw =
-        FakeGateway()..on(
-          'GET',
-          '/v1/markets',
-          (_) => (
-            status: 200,
-            body: {
-              'markets': [
-                {
-                  'symbol': 'MON-USDC',
-                  'baseToken': '0x0',
-                  'quoteToken': '0x1',
-                  'baseDecimals': 18,
-                  'quoteDecimals': 6,
-                  'tickSize': '0.000001000000000000',
-                  'minQty': '0.000002000000000000',
-                },
-              ],
-            },
-          ),
-        );
+        FakeGateway()
+          ..on(
+            'GET',
+            '/v1/markets',
+            (_) => (
+              status: 200,
+              body: {
+                'markets': [
+                  {
+                    'symbol': 'MON-USDC',
+                    'baseToken': '0x0',
+                    'quoteToken': '0x1',
+                    'baseDecimals': 18,
+                    'quoteDecimals': 6,
+                    'tickSize': '0.000001000000000000',
+                    'minQty': '0.000002000000000000',
+                  },
+                ],
+              },
+            ),
+          )
+          ..on(
+            'GET',
+            '/v1/markets/MON-USDC/candles',
+            (_) => (status: 200, body: {'candles': <Object>[]}),
+          );
     final c = MarketListController(config: _config, api: gw.api());
 
     await c.load();
 
-    expect(c.state.markets, hasLength(1));
-    expect(c.state.markets!.first.symbol, 'MON-USDC');
+    expect(c.state.summaries, hasLength(1));
+    expect(c.state.summaries!.first.market.symbol, 'MON-USDC');
     expect(c.state.error, isNull);
     expect(c.state.loading, isFalse);
   });
@@ -61,7 +67,7 @@ void main() {
 
     await c.load();
 
-    expect(c.state.markets, isNull);
+    expect(c.state.summaries, isNull);
     expect(c.state.error, 'market data is not available');
     expect(c.state.loading, isFalse);
   });
