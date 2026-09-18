@@ -159,6 +159,38 @@ void main() {
     expect((submitted['signature'] as String).length, 2 + 65 * 2);
   });
 
+  test(
+    'load key → account → sendTrade → watch it land, amount scaled by '
+    'the given decimals not the sponsored token\'s',
+    () async {
+      final gw = _gateway(owner: owner);
+      final c = controller(gw);
+
+      await c.loadOrCreateKey();
+
+      // 18 decimals (e.g. ETH-USDC's base asset), not the sponsored token's
+      // 6 -- proves sendTrade uses the decimals it's given, not state.token.
+      await c.sendTrade(
+        market: 'ETH-USDC',
+        side: 'sell',
+        amountHuman: '0.01',
+        decimals: 18,
+      );
+
+      expect(c.state.op?.status, 'landed');
+      expect(c.state.error, isNull);
+      expect(gw.lastBody('POST', '/v1/mera/ops')['intent'], {
+        'kind': 'trade',
+        'market': 'ETH-USDC',
+        'side': 'sell',
+        'amount': '10000000000000000', // 0.01 * 1e18
+      });
+      final submitted = gw.lastBody('POST', '/v1/mera/ops/op_1/submit');
+      expect(submitted['owner'], owner);
+      expect(submitted['signature'], startsWith('0x'));
+    },
+  );
+
   test('an existing on-device key is reused, not regenerated', () async {
     final gw = _gateway(owner: owner);
     final c1 = controller(gw);

@@ -330,6 +330,31 @@ func (c *Client) GetLogs(ctx context.Context, address string, topics []string, f
 // The distinction matters for ERC-4337: an account that does not exist yet must
 // carry initCode so the EntryPoint deploys it, and an account that already does
 // must not — sending initCode for a deployed account is rejected as AA10.
+// Balance returns an address's native MON balance, in wei. Needed once
+// order placement lets a Mera account sell native MON directly (msg.value,
+// not an ERC-20 transferFrom) -- balanceOf() only ever covers a token
+// contract, never the account's own native balance.
+func (c *Client) Balance(ctx context.Context, address string) (*big.Int, error) {
+	return Retry(ctx, "eth_getBalance", 4, func(ctx context.Context) (*big.Int, error) {
+		out, err := c.call(ctx, []rpcRequest{{
+			JSONRPC: "2.0", ID: c.seq.Add(1), Method: "eth_getBalance",
+			Params: []any{address, "latest"},
+		}})
+		if err != nil {
+			return nil, err
+		}
+		var hex string
+		if err := json.Unmarshal(out[0].Result, &hex); err != nil {
+			return nil, err
+		}
+		b, err := decodeHex(hex)
+		if err != nil {
+			return nil, err
+		}
+		return new(big.Int).SetBytes(b), nil
+	})
+}
+
 func (c *Client) Code(ctx context.Context, address string) ([]byte, error) {
 	return Retry(ctx, "eth_getCode", 4, func(ctx context.Context) ([]byte, error) {
 		out, err := c.call(ctx, []rpcRequest{{

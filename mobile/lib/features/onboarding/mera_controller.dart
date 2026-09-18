@@ -206,6 +206,49 @@ class MeraController extends ChangeNotifier {
     }
   }
 
+  /// Places a market buy or sell on [market] — [amountHuman] is whole units
+  /// of whichever asset is being spent (base for a sell, quote for a buy),
+  /// scaled here with [decimals] the same way [send] scales a transfer
+  /// amount with the token's own decimals, never sent as a human number.
+  Future<void> sendTrade({
+    required String market,
+    required String side,
+    required String amountHuman,
+    required int decimals,
+  }) async {
+    final key = _state.key;
+    if (key == null || _state.account == null) return;
+
+    _set(
+      _state.copyWith(
+        stage: MeraStage.sending,
+        clearError: true,
+        clearOp: true,
+      ),
+    );
+    try {
+      final owner = _keyService.addressOf(key);
+      final baseUnits = Money.parse(amountHuman, decimals).units.toString();
+      final prepared = await _api.prepareMeraTrade(
+        owner: owner,
+        market: market,
+        side: side,
+        amount: baseUnits,
+      );
+
+      final signature = _keyService.sign(key, prepared.challenge);
+
+      await _api.submitMera(
+        opId: prepared.opId,
+        owner: owner,
+        signature: signature,
+      );
+      await _watch(prepared.opId);
+    } catch (e) {
+      _set(_state.copyWith(stage: MeraStage.idle, error: describeAmount(e)));
+    }
+  }
+
   Future<void> _watch(String opId) async {
     final deadline = DateTime.now().add(pollTimeout);
     while (!_disposed) {

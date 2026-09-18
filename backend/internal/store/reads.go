@@ -20,9 +20,11 @@ type Market struct {
 	BaseDec        int32
 	QuoteDec       int32
 	Venue          string
+	VenueRef       []byte // the venue's own market/order-book address; nil if unset
 	TickSize       string
 	MinQty         string
 	PricePrecision int64
+	SizePrecision  int64
 }
 
 // Candle is one candles row.
@@ -48,8 +50,8 @@ type Trade struct {
 // ListMarkets returns every enabled market, ordered for a stable list.
 func (s *Store) ListMarkets(ctx context.Context) ([]Market, error) {
 	rows, err := s.pool.Query(ctx, `
-		select symbol, base_token, quote_token, base_dec, quote_dec, venue,
-		       tick_size::text, min_qty::text, price_precision
+		select symbol, base_token, quote_token, base_dec, quote_dec, venue, venue_ref,
+		       tick_size::text, min_qty::text, price_precision, size_precision
 		from markets where enabled order by symbol`)
 	if err != nil {
 		return nil, err
@@ -60,7 +62,7 @@ func (s *Store) ListMarkets(ctx context.Context) ([]Market, error) {
 	for rows.Next() {
 		var m Market
 		if err := rows.Scan(&m.Symbol, &m.BaseToken, &m.QuoteToken, &m.BaseDec, &m.QuoteDec,
-			&m.Venue, &m.TickSize, &m.MinQty, &m.PricePrecision); err != nil {
+			&m.Venue, &m.VenueRef, &m.TickSize, &m.MinQty, &m.PricePrecision, &m.SizePrecision); err != nil {
 			return nil, err
 		}
 		out = append(out, m)
@@ -74,10 +76,11 @@ func (s *Store) MarketBySymbol(ctx context.Context, symbol string) (Market, bool
 	var m Market
 	m.Symbol = symbol
 	err := s.pool.QueryRow(ctx, `
-		select base_token, quote_token, base_dec, quote_dec, venue,
-		       tick_size::text, min_qty::text, price_precision
+		select base_token, quote_token, base_dec, quote_dec, venue, venue_ref,
+		       tick_size::text, min_qty::text, price_precision, size_precision
 		from markets where symbol = $1 and enabled`, symbol).
-		Scan(&m.BaseToken, &m.QuoteToken, &m.BaseDec, &m.QuoteDec, &m.Venue, &m.TickSize, &m.MinQty, &m.PricePrecision)
+		Scan(&m.BaseToken, &m.QuoteToken, &m.BaseDec, &m.QuoteDec, &m.Venue, &m.VenueRef,
+			&m.TickSize, &m.MinQty, &m.PricePrecision, &m.SizePrecision)
 	if err == pgx.ErrNoRows {
 		return Market{}, false, nil
 	}

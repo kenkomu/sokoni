@@ -31,14 +31,17 @@ import (
 
 	"github.com/kenkomu/sokoni/backend/internal/account"
 	"github.com/kenkomu/sokoni/backend/internal/bundler"
+	"github.com/kenkomu/sokoni/backend/internal/money"
 	"github.com/kenkomu/sokoni/backend/internal/store"
 	"github.com/kenkomu/sokoni/backend/internal/userop"
+	"github.com/kenkomu/sokoni/backend/internal/venue"
 )
 
 // Chain is the slice of a chain client the gateway reads through.
 type Chain interface {
 	Call(ctx context.Context, to string, data string) ([]byte, error)
 	Code(ctx context.Context, address string) ([]byte, error)
+	Balance(ctx context.Context, address string) (*big.Int, error)
 }
 
 // Bundler is the slice of a bundler client the gateway submits through.
@@ -248,11 +251,22 @@ type MeraAccountView struct {
 // Intent is what the phone asks for. Never calldata: the phone does not
 // ABI-encode, and an endpoint that sponsored arbitrary calldata would be a
 // general-purpose free gas tap.
+//
+// Two shapes share this one struct rather than each getting its own type,
+// because both go through the same prepare/submit envelope and the JSON is
+// simpler with one flat object than a tagged union: kind="transfer" uses
+// Token/To/Amount; kind="trade" uses Market/Side/Amount. Amount always means
+// "base units of whichever asset is being spent" — wei of the token for a
+// transfer, wei of the base asset for a sell, wei of the quote asset for a
+// buy — the phone computes it the same way either time (Money.parse against
+// the relevant asset's own decimals), never a human-typed number.
 type Intent struct {
 	Kind   string `json:"kind"`
 	Token  string `json:"token"`
 	To     string `json:"to"`
 	Amount string `json:"amount"` // base units, as a decimal string — never a float
+	Market string `json:"market"`
+	Side   string `json:"side"` // "buy" | "sell"
 }
 
 type PreparedView struct {
@@ -426,31 +440,9 @@ func (s *Service) Prepare(ctx context.Context, credentialID string, in Intent) (
 		return nil, fail(KindNotFound, "unknown_credential", "register this passkey before sending anything", nil)
 	}
 
-	token, to, amount, err := s.validateIntent(in)
+	callData, err := s.buildCallData(ctx, in, cred.Address)
 	if err != nil {
 		return nil, err
-	}
-
-	// Refuse to sponsor a transfer that is certain to revert. A reverted
-	// execution still costs the paymaster its gas, so without this anyone could
-	// create empty accounts and drain the deposit one failed transfer at a time.
-	balance, err := s.balanceOf(ctx, token.Address, cred.Address)
-	if err != nil {
-		return nil, err
-	}
-	if balance.Cmp(amount) < 0 {
-		return nil, fail(KindInvalid, "insufficient_balance", fmt.Sprintf(
-			"not enough %s — the account holds %s base units and this sends %s; deposit or reduce the amount",
-			token.Symbol, balance, amount), nil)
-	}
-
-	inner, err := account.EncodeERC20Transfer(to, amount)
-	if err != nil {
-		return nil, fail(KindInvalid, "bad_amount", err.Error(), nil)
-	}
-	callData, err := account.EncodeExecute(token.Address, new(big.Int), inner)
-	if err != nil {
-		return nil, fail(KindInvalid, "encode", "could not encode the call", err)
 	}
 
 	deployed, err := s.deployed(ctx, cred.Address)
@@ -518,11 +510,52 @@ func (s *Service) Prepare(ctx context.Context, credentialID string, in Intent) (
 	}, nil
 }
 
-func (s *Service) validateIntent(in Intent) (Token, common.Address, *big.Int, error) {
-	if in.Kind != "transfer" {
-		return Token{}, common.Address{}, nil, fail(KindInvalid, "unsupported_intent",
-			fmt.Sprintf("%q is not something the gateway can do yet; only \"transfer\" is supported", in.Kind), nil)
+// buildCallData turns a validated Intent into the calldata Prepare/PrepareMera
+// put in a UserOperation, dispatching on Kind -- the one place either caller
+// needs to know both intent shapes exist.
+func (s *Service) buildCallData(ctx context.Context, in Intent, accountAddr common.Address) ([]byte, error) {
+	switch in.Kind {
+	case "transfer":
+		return s.buildTransferCallData(ctx, in, accountAddr)
+	case "trade":
+		return s.buildTradeCallData(ctx, in, accountAddr)
+	default:
+		return nil, fail(KindInvalid, "unsupported_intent",
+			fmt.Sprintf("%q is not something the gateway can do yet; \"transfer\" and \"trade\" are supported", in.Kind), nil)
 	}
+}
+
+func (s *Service) buildTransferCallData(ctx context.Context, in Intent, accountAddr common.Address) ([]byte, error) {
+	token, to, amount, err := s.validateIntent(in)
+	if err != nil {
+		return nil, err
+	}
+
+	// Refuse to sponsor a transfer that is certain to revert. A reverted
+	// execution still costs the paymaster its gas, so without this anyone could
+	// create empty accounts and drain the deposit one failed transfer at a time.
+	balance, err := s.balanceOf(ctx, token.Address, accountAddr)
+	if err != nil {
+		return nil, err
+	}
+	if balance.Cmp(amount) < 0 {
+		return nil, fail(KindInvalid, "insufficient_balance", fmt.Sprintf(
+			"not enough %s — the account holds %s base units and this sends %s; deposit or reduce the amount",
+			token.Symbol, balance, amount), nil)
+	}
+
+	inner, err := account.EncodeERC20Transfer(to, amount)
+	if err != nil {
+		return nil, fail(KindInvalid, "bad_amount", err.Error(), nil)
+	}
+	callData, err := account.EncodeExecute(token.Address, new(big.Int), inner)
+	if err != nil {
+		return nil, fail(KindInvalid, "encode", "could not encode the call", err)
+	}
+	return callData, nil
+}
+
+func (s *Service) validateIntent(in Intent) (Token, common.Address, *big.Int, error) {
 	if !common.IsHexAddress(in.Token) {
 		return Token{}, common.Address{}, nil, fail(KindInvalid, "bad_token", "token must be a 0x address", nil)
 	}
@@ -554,6 +587,122 @@ func parseAmount(s string) (*big.Int, bool) {
 		return nil, false
 	}
 	return v, true
+}
+
+// buildTradeCallData encodes a market buy/sell on Kuru. The security gate
+// here is different from buildTransferCallData's SPONSORED_TOKENS allowlist:
+// there is no separate token allowlist for trading, because the asset
+// addresses come from our own `markets` row (found via MarketBySymbol, which
+// only ever returns enabled=true), never from the request -- the allowlist
+// *is* the enabled markets table.
+//
+// minAmountOut is always 0 for now: no on-chain slippage protection. A thin
+// book can hand a market order back far less than its spot price implies.
+// Tracked as a known gap (see CLAUDE.md), not silently assumed safe --
+// closing it means a live bestBidAsk() read here before every trade.
+func (s *Service) buildTradeCallData(ctx context.Context, in Intent, accountAddr common.Address) ([]byte, error) {
+	if s.d.Markets == nil {
+		return nil, s.noMarketData()
+	}
+	if in.Side != "buy" && in.Side != "sell" {
+		return nil, fail(KindInvalid, "bad_side", `side must be "buy" or "sell"`, nil)
+	}
+	if in.Market == "" {
+		return nil, fail(KindInvalid, "bad_market", "market must be a symbol, e.g. \"MON-USDC\"", nil)
+	}
+	amount, ok := parseAmount(in.Amount)
+	if !ok {
+		return nil, fail(KindInvalid, "bad_amount",
+			"amount must be a positive whole number of base units, written as a string", nil)
+	}
+
+	m, found, err := s.d.Markets.MarketBySymbol(ctx, in.Market)
+	if err != nil {
+		return nil, fail(KindUpstream, "store", "could not read the market", err)
+	}
+	if !found {
+		return nil, fail(KindNotFound, "market_not_found", "no such market", nil)
+	}
+	if len(m.VenueRef) != 20 {
+		return nil, fail(KindInvalid, "market_not_tradable", "this market has no order book configured", nil)
+	}
+	venueRef := common.BytesToAddress(m.VenueRef)
+	baseToken := common.BytesToAddress(m.BaseToken)
+	quoteToken := common.BytesToAddress(m.QuoteToken)
+	minAmountOut := new(big.Int) // see doc comment above
+
+	var asset common.Address
+	var inner []byte
+
+	if in.Side == "sell" {
+		asset = baseToken
+		sizeRaw, actualWei := venue.SizeRaw(amount, m.SizePrecision, m.BaseDec)
+		if sizeRaw.Sign() == 0 {
+			return nil, fail(KindInvalid, "bad_amount",
+				"amount is below this market's smallest tradable size", nil)
+		}
+		if minQty, err := money.Parse(m.MinQty, m.BaseDec); err == nil && amount.Cmp(minQty.Units()) < 0 {
+			return nil, fail(KindInvalid, "below_min_size",
+				fmt.Sprintf("this market's minimum order size is %s", m.MinQty), nil)
+		}
+		if inner, err = venue.EncodePlaceAndExecuteMarketSell(sizeRaw, minAmountOut, false, false); err != nil {
+			return nil, fail(KindInvalid, "encode", "could not encode the sell order", err)
+		}
+		amount = actualWei // the exact wei the contract will actually pull -- see SizeRaw's doc
+	} else {
+		asset = quoteToken
+		quoteRaw, actualWei := venue.QuoteAmountRaw(amount, m.PricePrecision, m.QuoteDec)
+		if quoteRaw.Sign() == 0 {
+			return nil, fail(KindInvalid, "bad_amount",
+				"amount is below this market's smallest tradable size", nil)
+		}
+		if inner, err = venue.EncodePlaceAndExecuteMarketBuy(quoteRaw, minAmountOut, false, false); err != nil {
+			return nil, fail(KindInvalid, "encode", "could not encode the buy order", err)
+		}
+		amount = actualWei
+	}
+
+	native := asset == (common.Address{})
+	var balance *big.Int
+	if native {
+		balance, err = s.d.Chain.Balance(ctx, accountAddr.Hex())
+	} else {
+		balance, err = s.balanceOf(ctx, asset, accountAddr)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if balance.Cmp(amount) < 0 {
+		return nil, fail(KindInvalid, "insufficient_balance", fmt.Sprintf(
+			"not enough of the %s asset — the account holds %s base units and this order needs %s; deposit or reduce the amount",
+			map[bool]string{true: "sell", false: "buy"}[in.Side == "sell"], balance, amount), nil)
+	}
+
+	if native {
+		callData, err := account.EncodeExecute(venueRef, amount, inner)
+		if err != nil {
+			return nil, fail(KindInvalid, "encode", "could not encode the call", err)
+		}
+		return callData, nil
+	}
+
+	// An ERC-20 leg (the token being sold, or the quote token being spent on
+	// a buy) needs an approve before Kuru's transferFrom -- batched into the
+	// same UserOperation as the trade itself, or the approval would be a
+	// second, separately-signed step.
+	approveCall, err := venue.EncodeApprove(venueRef, amount)
+	if err != nil {
+		return nil, fail(KindInvalid, "encode", "could not encode the approval", err)
+	}
+	callData, err := account.EncodeExecuteBatch(
+		[]common.Address{asset, venueRef},
+		[]*big.Int{new(big.Int), new(big.Int)},
+		[][]byte{approveCall, inner},
+	)
+	if err != nil {
+		return nil, fail(KindInvalid, "encode", "could not encode the call", err)
+	}
+	return callData, nil
 }
 
 // ------------------------------------------------------------------ submit
@@ -710,28 +859,9 @@ func (s *Service) PrepareMera(ctx context.Context, owner common.Address, in Inte
 		return nil, fail(KindNotFound, "unknown_owner", "register this owner before sending anything", nil)
 	}
 
-	token, to, amount, err := s.validateIntent(in)
+	callData, err := s.buildCallData(ctx, in, cred.Address)
 	if err != nil {
 		return nil, err
-	}
-
-	balance, err := s.balanceOf(ctx, token.Address, cred.Address)
-	if err != nil {
-		return nil, err
-	}
-	if balance.Cmp(amount) < 0 {
-		return nil, fail(KindInvalid, "insufficient_balance", fmt.Sprintf(
-			"not enough %s — the account holds %s base units and this sends %s; deposit or reduce the amount",
-			token.Symbol, balance, amount), nil)
-	}
-
-	inner, err := account.EncodeERC20Transfer(to, amount)
-	if err != nil {
-		return nil, fail(KindInvalid, "bad_amount", err.Error(), nil)
-	}
-	callData, err := account.EncodeExecute(token.Address, new(big.Int), inner)
-	if err != nil {
-		return nil, fail(KindInvalid, "encode", "could not encode the call", err)
 	}
 
 	deployed, err := s.deployed(ctx, cred.Address)

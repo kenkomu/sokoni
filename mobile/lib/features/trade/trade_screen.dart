@@ -11,6 +11,7 @@ import '../../design/price_flash.dart';
 import '../../design/theme.dart';
 import '../../design/token_avatar.dart';
 import 'candle_chart.dart';
+import 'order_sheet.dart';
 import 'trade_controller.dart';
 
 /// The kit's "Coin page" — price, chart, recent trades, and what market
@@ -157,7 +158,7 @@ class _TradeScreenState extends State<TradeScreen> {
                   ],
                 ),
       ),
-      bottomNavigationBar: const _BuySellBar(),
+      bottomNavigationBar: _BuySellBar(config: widget.config, market: market),
     );
   }
 }
@@ -355,41 +356,43 @@ class _StatRow extends StatelessWidget {
 /// with an explanation rather than either hidden (which would silently
 /// diverge from the design) or wired to an endpoint that doesn't exist.
 class _BuySellBar extends StatelessWidget {
-  const _BuySellBar();
+  const _BuySellBar({required this.config, required this.market});
+
+  final AppConfig config;
+  final MarketInfo market;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return SafeArea(
       top: false,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+        child: Row(
           children: [
-            Text(
-              'Order placement isn’t live yet',
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
+            Expanded(
+              child: FilledButton(
+                onPressed:
+                    () => showOrderSheet(
+                      context,
+                      config: config,
+                      market: market,
+                      side: 'buy',
+                    ),
+                child: const Text('Buy'),
               ),
             ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: FilledButton(
-                    onPressed: null,
-                    child: const Text('Buy'),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: FilledButton.tonal(
-                    onPressed: null,
-                    child: const Text('Sell'),
-                  ),
-                ),
-              ],
+            const SizedBox(width: 12),
+            Expanded(
+              child: FilledButton.tonal(
+                onPressed:
+                    () => showOrderSheet(
+                      context,
+                      config: config,
+                      market: market,
+                      side: 'sell',
+                    ),
+                child: const Text('Sell'),
+              ),
             ),
           ],
         ),

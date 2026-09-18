@@ -119,6 +119,28 @@ class SokoniApi {
     }),
   );
 
+  /// Ask for a market buy or sell on a Kuru market. [amount] is base units
+  /// of whichever asset is being spent — the base asset's wei for a sell,
+  /// the quote asset's wei for a buy (see gateway.Intent's doc comment) —
+  /// scaled with [MarketInfo.baseDecimals]/[quoteDecimals] on the caller's
+  /// side, same "phone never sends a human number" rule as a transfer.
+  Future<PreparedOp> prepareMeraTrade({
+    required String owner,
+    required String market,
+    required String side,
+    required String amount,
+  }) async => PreparedOp.fromJson(
+    await _post('/v1/mera/ops', {
+      'owner': owner,
+      'intent': {
+        'kind': 'trade',
+        'market': market,
+        'side': side,
+        'amount': amount,
+      },
+    }),
+  );
+
   /// Hand back the 65-byte (r, s, v) ECDSA signature as 0x-hex — exactly what
   /// [MeraKeyService.sign] produces, no mapping layer in between.
   Future<SubmittedOp> submitMera({

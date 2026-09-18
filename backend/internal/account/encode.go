@@ -144,6 +144,45 @@ func EncodeExecute(target common.Address, value *big.Int, data []byte) ([]byte, 
 	return append(selector("execute(address,uint256,bytes)"), args...), nil
 }
 
+var executeBatchArgs = abi.Arguments{
+	{Type: mustType("address[]", nil)},
+	{Type: mustType("uint256[]", nil)},
+	{Type: mustType("bytes[]", nil)},
+}
+
+// EncodeExecuteBatch builds callData for several calls in one UserOperation
+// -- e.g. an ERC-20 approve immediately followed by the call that spends it,
+// which must land in the same operation or the approval is a second,
+// separately-signed step. Matches SimpleAccount.executeBatch (and
+// SokoniAccount's, same signature) exactly, not a Sokoni-specific shape:
+// `executeBatch(address[] dest, uint256[] value, bytes[] func)`.
+func EncodeExecuteBatch(targets []common.Address, values []*big.Int, data [][]byte) ([]byte, error) {
+	if len(targets) != len(values) || len(targets) != len(data) {
+		return nil, fmt.Errorf("executeBatch: targets/values/data must be the same length, got %d/%d/%d",
+			len(targets), len(values), len(data))
+	}
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("executeBatch: at least one call is required")
+	}
+	for _, v := range values {
+		if v != nil && v.Sign() < 0 {
+			return nil, fmt.Errorf("value must be non-negative")
+		}
+	}
+	normalized := make([]*big.Int, len(values))
+	for i, v := range values {
+		if v == nil {
+			v = new(big.Int)
+		}
+		normalized[i] = v
+	}
+	args, err := executeBatchArgs.Pack(targets, normalized, data)
+	if err != nil {
+		return nil, err
+	}
+	return append(selector("executeBatch(address[],uint256[],bytes[])"), args...), nil
+}
+
 // ---------------------------------------------------------------- factory
 
 type abiPasskey struct {

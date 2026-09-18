@@ -101,6 +101,18 @@ func (f *fakeChain) Code(_ context.Context, address string) ([]byte, error) {
 	return f.code[common.HexToAddress(address)], nil
 }
 
+// Balance answers the same fixed native balance for every address -- trade
+// tests on a native-base market exercise this, but never more than one
+// account per test, so per-address state has never been needed.
+func (f *fakeChain) Balance(_ context.Context, _ string) (*big.Int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.balance == nil {
+		return big.NewInt(0), nil
+	}
+	return f.balance, nil
+}
+
 func (f *fakeChain) set(fn func(*fakeChain)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -676,6 +688,171 @@ func TestPrepareRefusesUnsupportedIntents(t *testing.T) {
 		t.Fatalf("got %v, want unsupported_intent", err)
 	}
 }
+
+// ---------------------------------------------------------------- trade intents
+
+var (
+	testVenueRef = common.HexToAddress("0x000000000000000000000000000000000000B00C")
+	executeSel   = sel("execute(address,uint256,bytes)")
+	executeBatch = sel("executeBatch(address[],uint256[],bytes[])")
+)
+
+// nativeMarket sells the account's own native MON (base=zero address) for
+// testToken (quote) -- the same shape as the real MON-USDC market.
+func nativeMarket() store.Market {
+	return store.Market{
+		Symbol:         "MON-USDC",
+		BaseToken:      common.Address{}.Bytes(),
+		QuoteToken:     testToken.Bytes(),
+		BaseDec:        18,
+		QuoteDec:       6,
+		Venue:          "kuru",
+		VenueRef:       testVenueRef.Bytes(),
+		MinQty:         "200",
+		PricePrecision: 100_000_000,
+		SizePrecision:  10_000_000_000,
+	}
+}
+
+// erc20Market sells testToken as the base asset against a synthetic quote --
+// the same shape as the real ETH-USDC/BTC-USDC markets, where selling needs
+// an approve first.
+func erc20Market() store.Market {
+	return store.Market{
+		Symbol:         "WETH-USDC",
+		BaseToken:      testToken.Bytes(),
+		QuoteToken:     common.HexToAddress("0x00000000000000000000000000000000000051AB").Bytes(),
+		BaseDec:        18,
+		QuoteDec:       6,
+		Venue:          "kuru",
+		VenueRef:       testVenueRef.Bytes(),
+		MinQty:         "0.002",
+		PricePrecision: 10_000,
+		SizePrecision:  10_000_000_000,
+	}
+}
+
+func trade(market, side, amount string) Intent {
+	return Intent{Kind: "trade", Market: market, Side: side, Amount: amount}
+}
+
+func TestTradeSellNativeBaseEncodesASingleExecuteWithValue(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if _, err := r.svc.Register(ctx, cred, gPasskey()); err != nil {
+		t.Fatal(err)
+	}
+	r.markets.markets = []store.Market{nativeMarket()}
+	// 1_000_000 wei (fakeChain's default balance) covers a tiny sell; use an
+	// amount well under it but still above minSize (200 MON here would need
+	// 2e20 wei, more than the fake's default balance, so raise it).
+	r.chain.set(func(f *fakeChain) { f.balance = new(big.Int).Mul(big.NewInt(300), pow10(18)) })
+
+	sellWei := new(big.Int).Mul(big.NewInt(200), pow10(18)) // the market's own minSize
+	view, err := r.svc.Prepare(ctx, cred, trade("MON-USDC", "sell", sellWei.String()))
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	p := r.pending(t, view.OpID)
+	if got := "0x" + hex.EncodeToString(p.Op.CallData[:4]); got != executeSel {
+		t.Errorf("callData selector = %s, want execute (single call, native value attached)", got)
+	}
+}
+
+func TestTradeSellERC20BaseEncodesExecuteBatchWithApprove(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if _, err := r.svc.Register(ctx, cred, gPasskey()); err != nil {
+		t.Fatal(err)
+	}
+	r.markets.markets = []store.Market{erc20Market()}
+	r.chain.set(func(f *fakeChain) { f.balance = new(big.Int).Mul(big.NewInt(10), pow10(18)) })
+
+	sellWei := new(big.Int).Div(pow10(18), big.NewInt(100)) // 0.01 WETH, above the 0.002 min
+	view, err := r.svc.Prepare(ctx, cred, trade("WETH-USDC", "sell", sellWei.String()))
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	p := r.pending(t, view.OpID)
+	if got := "0x" + hex.EncodeToString(p.Op.CallData[:4]); got != executeBatch {
+		t.Errorf("callData selector = %s, want executeBatch (approve + sell)", got)
+	}
+}
+
+func TestTradeBuyEncodesExecuteBatchWithApprove(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if _, err := r.svc.Register(ctx, cred, gPasskey()); err != nil {
+		t.Fatal(err)
+	}
+	m := nativeMarket() // quote is testToken regardless of which fixture
+	r.markets.markets = []store.Market{m}
+	r.chain.set(func(f *fakeChain) { f.balance = big.NewInt(50_000_000) }) // 50 USDC @ 6dp
+
+	view, err := r.svc.Prepare(ctx, cred, trade("MON-USDC", "buy", "10000000")) // 10 USDC
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	p := r.pending(t, view.OpID)
+	if got := "0x" + hex.EncodeToString(p.Op.CallData[:4]); got != executeBatch {
+		t.Errorf("callData selector = %s, want executeBatch (approve + buy, quote is always ERC-20 here)", got)
+	}
+}
+
+func TestTradeRefusesAnUnknownMarket(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if _, err := r.svc.Register(ctx, cred, gPasskey()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.svc.Prepare(ctx, cred, trade("NOPE-USDC", "sell", "1")); errCode(err) != "market_not_found" {
+		t.Fatalf("got %v, want market_not_found", err)
+	}
+}
+
+func TestTradeRefusesBelowMinSize(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if _, err := r.svc.Register(ctx, cred, gPasskey()); err != nil {
+		t.Fatal(err)
+	}
+	r.markets.markets = []store.Market{nativeMarket()}
+	r.chain.set(func(f *fakeChain) { f.balance = new(big.Int).Mul(big.NewInt(300), pow10(18)) })
+
+	tiny := pow10(18) // 1 MON, far below the market's 200 MON minSize
+	if _, err := r.svc.Prepare(ctx, cred, trade("MON-USDC", "sell", tiny.String())); errCode(err) != "below_min_size" {
+		t.Fatalf("got %v, want below_min_size", err)
+	}
+}
+
+func TestTradeRefusesInsufficientBalance(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if _, err := r.svc.Register(ctx, cred, gPasskey()); err != nil {
+		t.Fatal(err)
+	}
+	r.markets.markets = []store.Market{nativeMarket()}
+	r.chain.set(func(f *fakeChain) { f.balance = big.NewInt(10) }) // far below 200 MON
+
+	sellWei := new(big.Int).Mul(big.NewInt(200), pow10(18))
+	if _, err := r.svc.Prepare(ctx, cred, trade("MON-USDC", "sell", sellWei.String())); errCode(err) != "insufficient_balance" {
+		t.Fatalf("got %v, want insufficient_balance", err)
+	}
+}
+
+func TestTradeRefusesABadSide(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if _, err := r.svc.Register(ctx, cred, gPasskey()); err != nil {
+		t.Fatal(err)
+	}
+	r.markets.markets = []store.Market{nativeMarket()}
+	if _, err := r.svc.Prepare(ctx, cred, trade("MON-USDC", "hodl", "1")); errCode(err) != "bad_side" {
+		t.Fatalf("got %v, want bad_side", err)
+	}
+}
+
+func pow10(n int64) *big.Int { return new(big.Int).Exp(big.NewInt(10), big.NewInt(n), nil) }
 
 func TestRegisterIsIdempotentButRefusesAKeySwap(t *testing.T) {
 	r := newRig(t)
