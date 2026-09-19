@@ -16,6 +16,12 @@ class Money implements Comparable<Money> {
 
   static Money zero(int decimals) => Money._(BigInt.zero, decimals);
 
+  /// Wraps an already-scaled base-units integer — what every API response
+  /// carrying money actually sends (see CLAUDE.md: "crossing the API as a
+  /// string"), as opposed to [Money.parse]'s human-typed decimal string.
+  factory Money.fromBaseUnits(BigInt units, int decimals) =>
+      Money._(units, decimals);
+
   /// Parses a plain decimal string. Throws rather than silently truncating an
   /// amount with more precision than the scale allows.
   factory Money.parse(String value, int decimals) {

@@ -33,6 +33,14 @@ class SokoniApi {
   Future<GatewayConfig> config() async =>
       GatewayConfig.fromJson(await _get('/v1/config'));
 
+  /// Every sponsored token's balanceOf for [address], read live from chain —
+  /// there is no ledger for this yet (see CLAUDE.md's Known gaps), so this
+  /// is exactly as current as the chain itself, never a cached number.
+  Future<AccountBalances> balances(String address) async =>
+      AccountBalances.fromJson(
+        await _get('/v1/accounts/$address/balances'),
+      );
+
   /// Learn the account this passkey owns. The address is counterfactual:
   /// known, and able to receive funds, before anything has been deployed.
   Future<AccountInfo> registerAccount({
@@ -292,6 +300,35 @@ class SponsoredToken {
   final String address;
   final String symbol;
   final int decimals;
+}
+
+class AccountBalance {
+  const AccountBalance({required this.token, required this.amount});
+
+  factory AccountBalance.fromJson(Map<String, dynamic> j) => AccountBalance(
+    token: SponsoredToken.fromJson(j['token'] as Map<String, dynamic>),
+    amount: _str(j, 'amount'),
+  );
+
+  final SponsoredToken token;
+
+  /// Base units, as a string — see core/money.dart's Money.fromBaseUnits.
+  final String amount;
+}
+
+class AccountBalances {
+  const AccountBalances({required this.address, required this.balances});
+
+  factory AccountBalances.fromJson(Map<String, dynamic> j) => AccountBalances(
+    address: _str(j, 'address'),
+    balances: [
+      for (final b in (j['balances'] as List? ?? const []))
+        AccountBalance.fromJson(b as Map<String, dynamic>),
+    ],
+  );
+
+  final String address;
+  final List<AccountBalance> balances;
 }
 
 class GatewayConfig {

@@ -40,12 +40,59 @@ void main() {
             '/v1/markets/MON-AUSD/candles',
             (_) => (status: 200, body: {'candles': <Object>[]}),
           );
-    final c = PortfolioController(config: _config, api: gw.api());
+    final c = PortfolioController(
+      config: _config,
+      accountAddress: null,
+      api: gw.api(),
+    );
 
     await c.load();
 
     expect(c.state.summaries, hasLength(1));
+    expect(c.state.balances, isEmpty);
     expect(c.state.error, isNull);
+  });
+
+  test('load with an account address fetches its balances too', () async {
+    final gw =
+        FakeGateway()
+          ..on(
+            'GET',
+            '/v1/markets',
+            (_) => (status: 200, body: {'markets': <Object>[]}),
+          )
+          ..on(
+            'GET',
+            '/v1/accounts/0xACC7/balances',
+            (_) => (
+              status: 200,
+              body: {
+                'address': '0xACC7',
+                'balances': [
+                  {
+                    'token': {
+                      'address': '0xTOK',
+                      'symbol': 'AUSD',
+                      'decimals': 6,
+                    },
+                    'amount': '5000000',
+                  },
+                ],
+              },
+            ),
+          );
+    final c = PortfolioController(
+      config: _config,
+      accountAddress: '0xACC7',
+      api: gw.api(),
+    );
+
+    await c.load();
+
+    expect(c.state.error, isNull);
+    expect(c.state.balances, hasLength(1));
+    expect(c.state.balances!.single.token.symbol, 'AUSD');
+    expect(c.state.balances!.single.amount, '5000000');
   });
 
   test('a gateway failure surfaces its message', () async {
@@ -61,7 +108,11 @@ void main() {
             },
           ),
         );
-    final c = PortfolioController(config: _config, api: gw.api());
+    final c = PortfolioController(
+      config: _config,
+      accountAddress: null,
+      api: gw.api(),
+    );
 
     await c.load();
 

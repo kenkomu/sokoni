@@ -406,6 +406,32 @@ func signWithTestPasskey(t *testing.T, challenge common.Hash) account.Assertion 
 
 // ---------------------------------------------------------------- tests
 
+// Balances reads live balanceOf for every sponsored token — one token here,
+// same as the rest of this file's Config, so the fake's single-token Call
+// branch (see fakeChain.Call's testToken case) is enough to pin it.
+func TestBalancesReadsEverySponsoredToken(t *testing.T) {
+	r := newRig(t)
+	r.chain.balance = big.NewInt(42_000_000)
+
+	got, err := r.svc.Balances(context.Background(), testAccount)
+	if err != nil {
+		t.Fatalf("Balances: %v", err)
+	}
+	if got.Address != testAccount.Hex() {
+		t.Fatalf("address = %s, want %s", got.Address, testAccount.Hex())
+	}
+	if len(got.Balances) != 1 {
+		t.Fatalf("len(Balances) = %d, want 1", len(got.Balances))
+	}
+	b := got.Balances[0]
+	if b.Token.Symbol != "TST" || b.Token.Address != testToken.Hex() || b.Token.Decimals != 6 {
+		t.Fatalf("token = %+v, want TST/%s/6", b.Token, testToken.Hex())
+	}
+	if b.Amount != "42000000" {
+		t.Fatalf("amount = %s, want 42000000", b.Amount)
+	}
+}
+
 // The whole Phase 1 loop, minus the phone and the chain: register, prepare,
 // sign the challenge, submit, watch it land.
 func TestFullLoopWithTheTestPasskey(t *testing.T) {

@@ -233,6 +233,18 @@ type ConfigView struct {
 	Tokens     []TokenView `json:"sponsoredTokens"`
 }
 
+// BalanceView's Amount is base units as a string, same convention as
+// everywhere else money crosses the API — see money.Amount / CLAUDE.md.
+type BalanceView struct {
+	Token  TokenView `json:"token"`
+	Amount string    `json:"amount"`
+}
+
+type BalancesView struct {
+	Address  string        `json:"address"`
+	Balances []BalanceView `json:"balances"`
+}
+
 type AccountView struct {
 	CredentialID string `json:"credentialId"`
 	Address      string `json:"address"`
@@ -363,6 +375,29 @@ func (s *Service) Config() ConfigView {
 		out.Tokens = append(out.Tokens, TokenView{Address: t.Address.Hex(), Symbol: t.Symbol, Decimals: t.Decimals})
 	}
 	return out
+}
+
+// Balances reads every sponsored token's balanceOf for holder, live from
+// chain — there is no ledger table for this yet (internal/treasury is still
+// a stub, see CLAUDE.md's Known gaps), so "the balance" is defined as
+// whatever the token contract itself currently says, not a cached or
+// indexed number that could drift from it.
+func (s *Service) Balances(ctx context.Context, holder common.Address) (*BalancesView, error) {
+	out := &BalancesView{
+		Address:  holder.Hex(),
+		Balances: make([]BalanceView, 0, len(s.cfg.Tokens)),
+	}
+	for _, t := range s.cfg.Tokens {
+		bal, err := s.balanceOf(ctx, t.Address, holder)
+		if err != nil {
+			return nil, err
+		}
+		out.Balances = append(out.Balances, BalanceView{
+			Token:  TokenView{Address: t.Address.Hex(), Symbol: t.Symbol, Decimals: t.Decimals},
+			Amount: bal.String(),
+		})
+	}
+	return out, nil
 }
 
 // ---------------------------------------------------------------- register
