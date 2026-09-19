@@ -1,10 +1,10 @@
 import 'package:flutter/foundation.dart';
-import 'package:web3dart/web3dart.dart';
 
 import '../../core/config.dart';
 import '../../core/money.dart';
 import '../../data/api/sokoni_api.dart';
 import '../../data/mera/mera_key_service.dart';
+import '../../data/signer.dart';
 
 /// What the Mera onboarding screen is currently doing.
 enum MeraStage { idle, loadingKey, registering, sending }
@@ -13,7 +13,7 @@ enum MeraStage { idle, loadingKey, registering, sending }
 class MeraState {
   const MeraState({
     this.stage = MeraStage.idle,
-    this.key,
+    this.signer,
     this.account,
     this.config,
     this.op,
@@ -22,9 +22,11 @@ class MeraState {
 
   final MeraStage stage;
 
-  /// Null until [MeraController.loadOrCreateKey] runs. Present means this
-  /// device already has an owner key, generated one just now.
-  final EthPrivateKey? key;
+  /// Null until [MeraController.loadOrCreateKey] or [MeraController.useWallet]
+  /// runs. Either an on-device key ([LocalKeySigner]) or a connected
+  /// external wallet — everything past this point (register, send,
+  /// sendTrade) talks to [Signer] only and never knows which.
+  final Signer? signer;
 
   /// What the gateway is willing to sponsor — same shape and same reason as
   /// PasskeyState.config.
@@ -41,7 +43,7 @@ class MeraState {
 
   MeraState copyWith({
     MeraStage? stage,
-    EthPrivateKey? key,
+    Signer? signer,
     MeraAccountInfo? account,
     GatewayConfig? config,
     OpStatus? op,
@@ -51,7 +53,7 @@ class MeraState {
   }) {
     return MeraState(
       stage: stage ?? this.stage,
-      key: key ?? this.key,
+      signer: signer ?? this.signer,
       account: account ?? this.account,
       config: config ?? this.config,
       op: clearOp ? null : (op ?? this.op),
@@ -67,12 +69,16 @@ class MeraState {
           : config!.sponsoredTokens.first;
 }
 
-/// Drives the Option 2 / Mera loop: find or create an on-device owner key,
-/// learn the smart account it owns, and move a token with it — no biometric
-/// prompt, no WebAuthn relying-party domain, because the key never leaves
-/// [MeraKeyService]'s secure storage and the signature is plain ECDSA. See
-/// mera_key_service.dart for why this substitutes for Mera's own PRF-based
-/// vault on this build.
+/// Drives the Option 2 / Mera loop: find or create an owner ([Signer]),
+/// learn the smart account it owns, and move a token or place a trade with
+/// it — no biometric prompt, no WebAuthn relying-party domain, because the
+/// signature is plain EIP-191 ECDSA regardless of where the key actually
+/// lives. [loadOrCreateKey] gets that key from this device's own secure
+/// storage (see mera_key_service.dart for why this substitutes for Mera's
+/// own PRF-based vault on this build); [useWallet] gets it from a connected
+/// external wallet instead (see data/wallet_connect/). Everything past
+/// registration reads [MeraState.signer], never a concrete key type, so
+/// which one supplied it is invisible to send/sendTrade/the gateway.
 class MeraController extends ChangeNotifier {
   MeraController({
     required AppConfig config,
@@ -127,30 +133,39 @@ class MeraController extends ChangeNotifier {
     try {
       var key = await _keyService.existing();
       key ??= await _keyService.generate();
-      _set(_state.copyWith(key: key));
-      await _registerWithGateway(key);
+      final signer = LocalKeySigner(key, keyService: _keyService);
+      _set(_state.copyWith(signer: signer));
+      await _registerWithGateway(signer);
     } catch (e) {
       _set(_state.copyWith(stage: MeraStage.idle, error: describeFailure(e)));
     }
   }
 
-  Future<void> _registerWithGateway(EthPrivateKey key) async {
+  /// The wallet-connect entry point: [signer] is already connected (e.g. a
+  /// Reown AppKit session) and ready to sign — this just registers/looks up
+  /// the account it owns, the same second half [loadOrCreateKey] runs, so a
+  /// connected wallet and an on-device key are indistinguishable from here
+  /// on.
+  Future<void> useWallet(Signer signer) async {
+    _set(_state.copyWith(signer: signer));
+    await _registerWithGateway(signer);
+  }
+
+  Future<void> _registerWithGateway(Signer signer) async {
     _set(_state.copyWith(stage: MeraStage.registering, clearError: true));
     try {
-      final account = await _api.registerMeraAccount(
-        owner: _keyService.addressOf(key),
-      );
+      final account = await _api.registerMeraAccount(owner: signer.address);
       _set(_state.copyWith(stage: MeraStage.idle, account: account));
     } catch (e) {
       _set(_state.copyWith(stage: MeraStage.idle, error: describeFailure(e)));
     }
   }
 
-  /// Retry only the gateway half, without touching the key.
+  /// Retry only the gateway half, without touching the signer.
   Future<void> registerAccount() async {
-    final key = _state.key;
-    if (key == null) return;
-    await _registerWithGateway(key);
+    final signer = _state.signer;
+    if (signer == null) return;
+    await _registerWithGateway(signer);
   }
 
   /// Send [amount] whole tokens of the gateway's sponsored token to [to].
@@ -158,8 +173,8 @@ class MeraController extends ChangeNotifier {
   /// is a local ECDSA sign — no platform dialog, because there is no
   /// WebAuthn assertion in this path.
   Future<void> send({required String to, required String amount}) async {
-    final key = _state.key;
-    if (key == null || _state.account == null) return;
+    final signer = _state.signer;
+    if (signer == null || _state.account == null) return;
 
     _set(
       _state.copyWith(
@@ -184,20 +199,19 @@ class MeraController extends ChangeNotifier {
         );
       }
 
-      final owner = _keyService.addressOf(key);
       final baseUnits = Money.parse(amount, token.decimals).units.toString();
       final prepared = await _api.prepareMeraTransfer(
-        owner: owner,
+        owner: signer.address,
         token: token.address,
         to: to,
         amount: baseUnits,
       );
 
-      final signature = _keyService.sign(key, prepared.challenge);
+      final signature = await signer.sign(prepared.challenge);
 
       await _api.submitMera(
         opId: prepared.opId,
-        owner: owner,
+        owner: signer.address,
         signature: signature,
       );
       await _watch(prepared.opId);
@@ -216,8 +230,8 @@ class MeraController extends ChangeNotifier {
     required String amountHuman,
     required int decimals,
   }) async {
-    final key = _state.key;
-    if (key == null || _state.account == null) return;
+    final signer = _state.signer;
+    if (signer == null || _state.account == null) return;
 
     _set(
       _state.copyWith(
@@ -227,20 +241,19 @@ class MeraController extends ChangeNotifier {
       ),
     );
     try {
-      final owner = _keyService.addressOf(key);
       final baseUnits = Money.parse(amountHuman, decimals).units.toString();
       final prepared = await _api.prepareMeraTrade(
-        owner: owner,
+        owner: signer.address,
         market: market,
         side: side,
         amount: baseUnits,
       );
 
-      final signature = _keyService.sign(key, prepared.challenge);
+      final signature = await signer.sign(prepared.challenge);
 
       await _api.submitMera(
         opId: prepared.opId,
-        owner: owner,
+        owner: signer.address,
         signature: signature,
       );
       await _watch(prepared.opId);

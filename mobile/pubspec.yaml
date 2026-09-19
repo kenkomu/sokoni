@@ -37,6 +37,19 @@ dependencies:
   # backend/internal/account/mera.go's meraEthSignedHash expects.
   web3dart: ^2.7.3
 
+  # Wallet-connect: lets a real external wallet (MetaMask, Trust Wallet,
+  # Rainbow, ...) sign in place of the on-device Mera key — an alternate
+  # Signer implementation (see data/signer.dart), not a second backend path.
+  # The protocol client directly (reown_sign/reown_core), not reown_appkit —
+  # AppKit's bundled modal drags in coinbase_wallet_sdk, an abandoned native
+  # Android module hardcoded to compileSdk 31, which fails checkDebugAarMetadata
+  # against every current androidx dependency and cannot be fixed from our
+  # side. We build our own connect UI anyway (wallet_connect_sheet.dart), so
+  # the bundled modal buys nothing.
+  reown_sign: ^1.3.8
+  reown_core: ^1.3.8
+  url_launcher: ^6.3.1
+
   # Money. Never a double — mirrors the backend's big.Int + scale.
   decimal: ^3.0.2
 
@@ -47,16 +60,16 @@ dependencies:
   firebase_core: ^3.8.1
   firebase_messaging: ^15.1.6
 
-  freezed_annotation: ^2.4.4
+  freezed_annotation: ^3.1.0
   json_annotation: ^4.9.0
-  intl: ^0.19.0
+  intl: ^0.20.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^5.0.0
   build_runner: ^2.4.14
-  freezed: ^2.5.7
+  freezed: ^3.1.0
   json_serializable: ^6.9.0
   riverpod_generator: ^2.6.3
   mocktail: ^1.0.4

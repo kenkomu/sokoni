@@ -101,7 +101,7 @@ class _MeraSheetState extends State<_MeraSheet> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final state = _controller.state;
-    final key = state.key;
+    final key = state.signer;
 
     return Padding(
       padding: EdgeInsets.fromLTRB(
@@ -156,7 +156,7 @@ class _MeraSheetState extends State<_MeraSheet> {
 
             if (key != null) ...[
               const SizedBox(height: 16),
-              _KeyCard(address: key.address.hexEip55),
+              _KeyCard(address: key.address),
             ],
 
             // The key exists but the gateway never heard about it — retry

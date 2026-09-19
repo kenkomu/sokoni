@@ -5,8 +5,8 @@ import '../../core/config.dart';
 import '../../data/api/sokoni_api.dart';
 import '../../design/app_shell.dart';
 import '../../design/theme.dart';
-import 'mera_sheet.dart';
 import 'onboarding_screen.dart';
+import 'wallet_connect_sheet.dart';
 
 /// Not a real account — `sokoni.app` has no Digital Asset Links entry for any
 /// device yet (see CLAUDE.md), so no phone can complete passkey registration
@@ -20,17 +20,16 @@ const _previewAccount = AccountInfo(
 );
 
 /// The app's first screen — copy and layout match Screen 1 of the "Crypto
-/// Trading App Design" Figma community file. Purely a welcome surface: both
-/// buttons open the same Mera sheet ([showMeraSheet]) — the Option 2 path
-/// (see CLAUDE.md / docs/adr on Mera), because it is the one onboarding flow
-/// that actually completes on a real device today. [showPasskeySheet]'s
-/// WebAuthn path is still wired up and tested, but stays unreachable from
-/// this screen: it needs `sokoni.app` (or whatever `SOKONI_RP_ID` names) to
-/// serve a Digital Asset Links file for this build's signing certificate,
-/// which nobody has stood up yet, and the `passkeys` plugin this app
-/// pins (2.22.3) exposes no PRF extension to back Mera's real vault scheme
-/// either — see mera_key_service.dart. Swap the button target back once
-/// both are true.
+/// Trading App Design" Figma community file. One entry point: connecting an
+/// external wallet ([showWalletConnectSheet]), which signs through the same
+/// [MeraController]/gateway flow the on-device Mera key used
+/// ([WalletConnectSigner] vs. [LocalKeySigner] — see data/signer.dart).
+/// [showPasskeySheet]'s WebAuthn path is still wired up and tested, but
+/// stays unreachable from this screen: it needs `sokoni.app` (or whatever
+/// `SOKONI_RP_ID` names) to serve a Digital Asset Links file for this
+/// build's signing certificate, which nobody has stood up yet, and the
+/// `passkeys` plugin this app pins (2.22.3) exposes no PRF extension to
+/// back Mera's real vault scheme either — see mera_key_service.dart.
 class WelcomeScreen extends StatelessWidget {
   const WelcomeScreen({required this.config, super.key});
 
@@ -88,27 +87,43 @@ class WelcomeScreen extends StatelessWidget {
                       SizedBox(
                         width: double.infinity,
                         height: 58,
-                        child: FilledButton(
+                        child: FilledButton.icon(
                           style: FilledButton.styleFrom(
                             shape: const StadiumBorder(),
                           ),
-                          onPressed: () => showMeraSheet(context, config),
-                          child: const Text(
-                            'Sign In',
+                          onPressed:
+                              () => showWalletConnectSheet(context, config),
+                          icon: const Icon(
+                            Icons.account_balance_wallet_outlined,
+                          ),
+                          label: const Text(
+                            'Connect a wallet',
                             style: TextStyle(fontSize: 18),
                           ),
                         ),
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 10),
                       Center(
-                        child: TextButton(
-                          onPressed: () => showMeraSheet(context, config),
-                          child: const Text(
-                            'Create an account',
-                            style: TextStyle(fontSize: 17),
-                          ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.lock_outline,
+                              size: 14,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              'Your keys stay in your wallet app',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
+                      const SizedBox(height: 28),
+                      const _WalletSupportRow(),
                     ],
                   ),
                 ),
@@ -171,6 +186,101 @@ class _DebugPreviewCard extends StatelessWidget {
             child: const Text('Preview'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Fills the space the removed "Sign In" / "Create an account" buttons left
+/// behind with something that earns its keep: recognisable wallet names so
+/// "Connect a wallet" reads as a real, well-supported option rather than a
+/// dead end, since [showWalletConnectSheet] works with any WalletConnect v2
+/// wallet, not just these four — see wallet_connect_signer.dart.
+class _WalletSupportRow extends StatelessWidget {
+  const _WalletSupportRow();
+
+  static const _wallets = [
+    (letter: 'M', name: 'MetaMask', color: Color(0xFFF6851B)),
+    (letter: 'T', name: 'Trust Wallet', color: Color(0xFF3375BB)),
+    (letter: 'R', name: 'Rainbow', color: Color(0xFF001E59)),
+    (letter: 'C', name: 'Coinbase', color: Color(0xFF0052FF)),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Text(
+          'Works with your favorite wallet',
+          style: theme.textTheme.labelMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+            letterSpacing: 0.2,
+          ),
+        ),
+        const SizedBox(height: 14),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            for (final wallet in _wallets) ...[
+              _WalletChip(letter: wallet.letter, color: wallet.color),
+              const SizedBox(width: 10),
+            ],
+            Container(
+              width: 40,
+              height: 40,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: theme.colorScheme.surfaceContainerHighest,
+              ),
+              child: Text(
+                '+300',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _WalletChip extends StatelessWidget {
+  const _WalletChip({required this.letter, required this.color});
+
+  final String letter;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 40,
+      height: 40,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: color,
+        border: Border.all(color: Colors.white, width: 2),
+        boxShadow: [
+          BoxShadow(
+            color: color.withValues(alpha: 0.25),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Text(
+        letter,
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w700,
+          fontSize: 16,
+        ),
       ),
     );
   }

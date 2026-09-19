@@ -8,11 +8,18 @@ class AppConfig {
     required this.wsUrl,
     required this.chainId,
     required this.relyingPartyId,
+    this.walletConnectProjectId = '',
   });
 
   final String apiBaseUrl;
   final String wsUrl;
   final int chainId;
+
+  /// From cloud.reown.com — free, but tied to a real account, so it's never
+  /// compiled in as a default the way the other config here can be. Empty
+  /// means "Connect Wallet" is disabled rather than crashing on an invalid
+  /// id; see welcome_screen.dart.
+  final String walletConnectProjectId;
 
   /// Domain the passkey is bound to.
   ///
@@ -39,6 +46,7 @@ class AppConfig {
       'SOKONI_RP_ID',
       defaultValue: 'sokoni.app',
     ),
+    walletConnectProjectId: String.fromEnvironment('WALLETCONNECT_PROJECT_ID'),
   );
 
   bool get isMainnet => chainId == monadMainnet;

@@ -137,7 +137,7 @@ void main() {
 
     await c.loadOrCreateKey();
     expect(c.state.account?.address, '0xACC7');
-    expect(c.state.key, isNotNull);
+    expect(c.state.signer, isNotNull);
 
     await c.send(to: '0xR', amount: '0.25');
 
@@ -195,12 +195,12 @@ void main() {
     final gw = _gateway(owner: owner);
     final c1 = controller(gw);
     await c1.loadOrCreateKey();
-    final first = c1.state.key!.privateKeyInt;
+    final first = c1.state.signer!.address;
 
     final c2 = controller(_gateway(owner: owner));
     await c2.loadOrCreateKey();
 
-    expect(c2.state.key!.privateKeyInt, first);
+    expect(c2.state.signer!.address, first);
   });
 
   test(
@@ -276,7 +276,7 @@ void main() {
       final c = controller(gw);
 
       await c.loadOrCreateKey();
-      expect(c.state.key, isNotNull);
+      expect(c.state.signer, isNotNull);
       expect(c.state.account, isNull);
       expect(c.state.error, contains('Could not reach the gateway'));
 

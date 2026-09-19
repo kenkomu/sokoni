@@ -5,6 +5,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:web3dart/crypto.dart';
 import 'package:web3dart/web3dart.dart';
 
+import '../signer.dart';
+
 /// The Option 2 / Mera path: an owner key for a `SimpleAccount`, held on this
 /// device, instead of a WebAuthn/P-256 credential owning a `SokoniAccount`.
 ///
@@ -76,4 +78,25 @@ class MeraKeyService {
   /// "start over" — there is no recovery path once this runs, by design:
   /// there is no seed phrase to fall back to either.
   Future<void> forget() => _storage.delete(key: _keyStorageKey);
+}
+
+/// A [Signer] backed by an on-device key held in [MeraKeyService]'s secure
+/// storage. Signing never leaves the device — no network round trip, unlike
+/// a connected wallet's [Signer] implementation.
+class LocalKeySigner implements Signer {
+  LocalKeySigner(this._key, {MeraKeyService? keyService})
+    : _keyService = keyService ?? MeraKeyService();
+
+  final EthPrivateKey _key;
+  final MeraKeyService _keyService;
+
+  /// The key this signer wraps — only [MeraController]'s own on-device-path
+  /// code should ever need this; everything else talks to [Signer].
+  EthPrivateKey get key => _key;
+
+  @override
+  String get address => _keyService.addressOf(_key);
+
+  @override
+  Future<Uint8List> sign(Uint8List hash) async => _keyService.sign(_key, hash);
 }
