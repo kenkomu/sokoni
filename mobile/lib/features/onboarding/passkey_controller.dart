@@ -4,6 +4,8 @@ import '../../core/money.dart';
 
 import '../../core/config.dart';
 import '../../data/api/sokoni_api.dart';
+import 'package:passkeys/authenticator.dart';
+
 import '../../data/passkey/passkey_authenticator.dart';
 import '../../data/passkey/passkey_service.dart';
 
@@ -94,6 +96,11 @@ class PasskeyController extends ChangeNotifier {
            PasskeyAuthenticatorService(
              relyingPartyId: config.relyingPartyId,
              relyingPartyName: 'Sokoni',
+             // Passkeys Doctor: surfaces *why* a Digital Asset Links check
+             // failed (wrong fingerprint, wrong content-type, a redirect)
+             // instead of the platform's own opaque failure. Debug-only —
+             // never worth the noise in a release build.
+             authenticator: PasskeyAuthenticator(debugMode: kDebugMode),
            ),
        _api = api ?? SokoniApi(baseUrl: config.apiBaseUrl);
 
@@ -156,7 +163,7 @@ class PasskeyController extends ChangeNotifier {
         // A real signup takes these from the account the backend created. Here
         // they only label the credential in the platform's passkey manager.
         userId: 'sokoni-demo-user',
-        userName: 'demo@sokoni.app',
+        userName: 'demo@sokoni.bitshada.com',
         displayName: 'Sokoni demo',
       );
       _set(_state.copyWith(registered: registered));

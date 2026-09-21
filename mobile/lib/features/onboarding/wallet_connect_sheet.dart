@@ -44,9 +44,7 @@ class _WalletConnectSheet extends StatefulWidget {
 
 class _WalletConnectSheetState extends State<_WalletConnectSheet>
     with WidgetsBindingObserver {
-  late final MeraController _controller = MeraController(
-    config: widget.config,
-  );
+  late final MeraController _controller = MeraController(config: widget.config);
   late final String _chainId = 'eip155:${widget.config.chainId}';
 
   ReownSignClient? _client;
@@ -93,7 +91,9 @@ class _WalletConnectSheetState extends State<_WalletConnectSheet>
           name: 'Sokoni',
           description:
               'Trade on Monad with your fingerprint. Balances in AUSD.',
-          url: 'https://sokoni.app',
+          // Shown to the wallet as this dapp's identity — not a domain we
+          // own, so it stays pointed at the one that actually is.
+          url: 'https://sokoni.bitshada.com',
           icons: [],
           // Where a wallet sends the person back to once they've approved.
           // This rides along in the session proposal, so it covers the whole
@@ -110,6 +110,11 @@ class _WalletConnectSheetState extends State<_WalletConnectSheet>
         _client = client;
         _initializing = false;
       });
+      // Straight into pairing rather than parking on a "Connect wallet"
+      // button: opening this sheet *was* that decision, and a second tap
+      // confirming the first only delays the wallet prompt. The button
+      // still exists below, as the retry after a failure.
+      await _connect();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -117,6 +122,14 @@ class _WalletConnectSheetState extends State<_WalletConnectSheet>
         _initializing = false;
       });
     }
+  }
+
+  Future<void> _retryInit() async {
+    setState(() {
+      _initError = null;
+      _initializing = true;
+    });
+    await _init();
   }
 
   Future<void> _connect() async {
@@ -238,11 +251,17 @@ class _WalletConnectSheetState extends State<_WalletConnectSheet>
           else if (_initializing)
             const Center(child: CircularProgressIndicator())
           else if (_initError != null)
-            _Notice(message: 'Could not start wallet connect: $_initError')
+            _Failed(
+              message: 'Could not start wallet connect: $_initError',
+              onRetry: _retryInit,
+            )
           else if (_controller.state.error != null)
-            _Notice(message: _controller.state.error!)
+            _Failed(message: _controller.state.error!, onRetry: _connect)
           else if (_connectError != null)
-            _Notice(message: 'Could not connect: $_connectError')
+            _Failed(
+              message: 'Could not connect: $_connectError',
+              onRetry: _connect,
+            )
           else if (_controller.state.isBusy || _connecting)
             Column(
               children: [
@@ -269,17 +288,48 @@ class _WalletConnectSheetState extends State<_WalletConnectSheet>
               ],
             )
           else
+            // Reached only if pairing ended without a session and without an
+            // error — e.g. the person dismissed the wallet chooser.
             SizedBox(
               width: double.infinity,
               height: 56,
               child: FilledButton.icon(
                 onPressed: _connect,
                 icon: const Icon(Icons.account_balance_wallet_outlined),
-                label: const Text('Connect wallet'),
+                label: const Text('Choose a wallet'),
               ),
             ),
         ],
       ),
+    );
+  }
+}
+
+/// A failure the person can act on, rather than a dead end: every error
+/// state here is retryable (the relay dropped, the wallet was dismissed,
+/// the gateway blipped), so each one says so.
+class _Failed extends StatelessWidget {
+  const _Failed({required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _Notice(message: message),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: 52,
+          child: FilledButton.icon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh),
+            label: const Text('Try again'),
+          ),
+        ),
+      ],
     );
   }
 }

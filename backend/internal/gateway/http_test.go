@@ -166,6 +166,65 @@ func TestRequestBodiesAreBounded(t *testing.T) {
 	}
 }
 
+// assetLinksStatement's top level is a JSON array, not an object, so it can't
+// go through do()'s map[string]any decode -- Decode into a map on an array
+// body fails silently (the error is swallowed there on purpose, since most
+// endpoints do return an object), which would make this test pass for the
+// wrong reason.
+func TestAssetLinksNamesThePackageAndFingerprint(t *testing.T) {
+	r, srv := newServer(t)
+	r.svc.cfg.AndroidPackageName = "app.sokoni"
+	r.svc.cfg.AndroidCertFingerprints = []string{"AA:BB:CC"}
+
+	resp, err := http.Get(srv.URL + "/.well-known/assetlinks.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("content-type = %q, want application/json — Android's own check requires it", ct)
+	}
+	var statements []assetLinksStatement
+	if err := json.NewDecoder(resp.Body).Decode(&statements); err != nil {
+		t.Fatal(err)
+	}
+	if len(statements) != 1 {
+		t.Fatalf("statements = %v, want exactly one", statements)
+	}
+	s := statements[0]
+	if s.Relation[0] != "delegate_permission/common.get_login_creds" {
+		t.Errorf("relation = %v", s.Relation)
+	}
+	if s.Target.PackageName != "app.sokoni" {
+		t.Errorf("package_name = %q", s.Target.PackageName)
+	}
+	if len(s.Target.SHA256CertFingerprints) != 1 || s.Target.SHA256CertFingerprints[0] != "AA:BB:CC" {
+		t.Errorf("sha256_cert_fingerprints = %v", s.Target.SHA256CertFingerprints)
+	}
+}
+
+func TestAssetLinksIsEmptyWithoutConfiguration(t *testing.T) {
+	r, srv := newServer(t)
+	r.svc.cfg.AndroidPackageName = ""
+	r.svc.cfg.AndroidCertFingerprints = nil
+
+	resp, err := http.Get(srv.URL + "/.well-known/assetlinks.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var statements []assetLinksStatement
+	if err := json.NewDecoder(resp.Body).Decode(&statements); err != nil {
+		t.Fatal(err)
+	}
+	if len(statements) != 0 {
+		t.Fatalf("statements = %v, want none when unconfigured", statements)
+	}
+}
+
 func TestConfigListsSponsoredTokens(t *testing.T) {
 	_, srv := newServer(t)
 	status, body := do(t, "GET", srv.URL+"/v1/config", nil)

@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -45,6 +46,22 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// splitNonEmpty is comma-split with blank entries dropped, so
+// "a,,b" and a trailing comma don't produce an empty fingerprint
+// that would silently never match anything.
+func splitNonEmpty(v string) []string {
+	if v == "" {
+		return nil
+	}
+	var out []string
+	for _, s := range strings.Split(v, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func require(key string) (string, error) {
@@ -159,9 +176,17 @@ func loadConfig() (gateway.Config, wiring, error) {
 		// The same relying party the phone binds its passkeys to (SOKONI_RP_ID
 		// on the client). A mismatch fails every assertion with "wrong relying
 		// party", which is at least an honest error.
-		RPIDHash: sha256.Sum256([]byte(env("SOKONI_RP_ID", "sokoni.app"))),
+		// sokoni.app is parked and unowned; sokoni.bitshada.com is the real,
+		// already-deployed domain this actually serves assetlinks.json from.
+		RPIDHash: sha256.Sum256([]byte(env("SOKONI_RP_ID", "sokoni.bitshada.com"))),
 		Tokens:   tokens,
 		Gas:      gas,
+		// See gateway.Config.AndroidCertFingerprints. Comma-separated: a
+		// device is signed with one certificate at a time, but a real
+		// rollout eventually needs the debug key, the release key, and
+		// Play's own upload-signing key listed together.
+		AndroidPackageName:      env("ANDROID_PACKAGE_NAME", "app.sokoni"),
+		AndroidCertFingerprints: splitNonEmpty(os.Getenv("ANDROID_CERT_FINGERPRINTS")),
 	}
 	return cfg, w, nil
 }

@@ -20,6 +20,7 @@ const maxBody = 64 << 10
 // NewHandler routes the gateway's HTTP API.
 //
 //	GET  /healthz
+//	GET  /.well-known/assetlinks.json      Digital Asset Links, for Android passkeys
 //	GET  /v1/config                        chain, EntryPoint, sponsored tokens
 //	POST /v1/accounts                      register a passkey, learn its account address
 //	POST /v1/ops                           prepare an operation, receive its challenge
@@ -46,6 +47,7 @@ func NewHandler(svc *Service, hub *Hub, log *slog.Logger) http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	mux.HandleFunc("GET /.well-known/assetlinks.json", h.assetLinks)
 	mux.HandleFunc("GET /v1/config", h.config)
 	mux.HandleFunc("POST /v1/accounts", h.register)
 	mux.HandleFunc("POST /v1/ops", h.prepare)
@@ -75,6 +77,40 @@ type errorBody struct {
 	// say). Invaluable while Phase 1 is being debugged on a device; tighten
 	// before real users see it.
 	Detail string `json:"detail,omitempty"`
+}
+
+// assetLinksStatement is Android's Digital Asset Links shape — see
+// https://developers.google.com/digital-asset-links. The "relation" name is
+// specific: Credential Manager checks for delegate_permission/common.get_login_creds,
+// not the common.handle_all_urls relation App Links uses, and the two are not
+// interchangeable.
+type assetLinksStatement struct {
+	Relation []string         `json:"relation"`
+	Target   assetLinksTarget `json:"target"`
+}
+
+type assetLinksTarget struct {
+	Namespace              string   `json:"namespace"`
+	PackageName            string   `json:"package_name"`
+	SHA256CertFingerprints []string `json:"sha256_cert_fingerprints"`
+}
+
+func (h *handler) assetLinks(w http.ResponseWriter, _ *http.Request) {
+	statements := []assetLinksStatement{}
+	if h.svc.cfg.AndroidPackageName != "" && len(h.svc.cfg.AndroidCertFingerprints) > 0 {
+		statements = append(statements, assetLinksStatement{
+			Relation: []string{"delegate_permission/common.get_login_creds"},
+			Target: assetLinksTarget{
+				Namespace:              "android_app",
+				PackageName:            h.svc.cfg.AndroidPackageName,
+				SHA256CertFingerprints: h.svc.cfg.AndroidCertFingerprints,
+			},
+		})
+	}
+	// Content-type matters here specifically — the passkeys plugin's own
+	// Digital Asset Links check (and Android's) requires application/json,
+	// which writeJSON already sets, served with no redirect in front of it.
+	writeJSON(w, http.StatusOK, statements)
 }
 
 func (h *handler) config(w http.ResponseWriter, _ *http.Request) {

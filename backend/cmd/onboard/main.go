@@ -119,7 +119,9 @@ func loadConfig() (*config, error) {
 	// phone and the gateway use. The account stores its sha256, and an assertion
 	// from any other domain will not bind. Hashed here rather than written out
 	// as a 64-hex default, which the security workflow would take for a key.
-	c.rpIDHash = sha256.Sum256([]byte(env("SOKONI_RP_ID", "sokoni.app")))
+	// sokoni.app is parked and unowned — sokoni.bitshada.com is the real,
+	// deployed domain, same default the gateway itself uses.
+	c.rpIDHash = sha256.Sum256([]byte(env("SOKONI_RP_ID", "sokoni.bitshada.com")))
 
 	return c, nil
 }

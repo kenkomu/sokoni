@@ -43,8 +43,11 @@ class AppConfig {
     ),
     chainId: int.fromEnvironment('SOKONI_CHAIN_ID', defaultValue: monadTestnet),
     relyingPartyId: String.fromEnvironment(
+      // sokoni.app is a parked domain nobody here owns, so it can never
+      // serve a Digital Asset Links file — sokoni.bitshada.com is the real
+      // deployment target this points at.
       'SOKONI_RP_ID',
-      defaultValue: 'sokoni.app',
+      defaultValue: 'sokoni.bitshada.com',
     ),
     walletConnectProjectId: String.fromEnvironment('WALLETCONNECT_PROJECT_ID'),
   );

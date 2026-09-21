@@ -8,11 +8,9 @@ import '../../design/theme.dart';
 import 'onboarding_screen.dart';
 import 'wallet_connect_sheet.dart';
 
-/// Not a real account — `sokoni.app` has no Digital Asset Links entry for any
-/// device yet (see CLAUDE.md), so no phone can complete passkey registration
-/// today. This lets the post-onboarding screens be reviewed on real hardware
-/// before that's set up. [kDebugMode]-gated: never reachable in a release
-/// build.
+/// Not a real account — lets the post-onboarding screens be reviewed on real
+/// hardware without going through onboarding first. [kDebugMode]-gated:
+/// never reachable in a release build.
 const _previewAccount = AccountInfo(
   credentialId: 'debug-preview',
   address: '0x000000000000000000000000000000000000dEaD',
@@ -25,11 +23,14 @@ const _previewAccount = AccountInfo(
 /// [MeraController]/gateway flow the on-device Mera key used
 /// ([WalletConnectSigner] vs. [LocalKeySigner] — see data/signer.dart).
 /// [showPasskeySheet]'s WebAuthn path is still wired up and tested, but
-/// stays unreachable from this screen: it needs `sokoni.app` (or whatever
-/// `SOKONI_RP_ID` names) to serve a Digital Asset Links file for this
-/// build's signing certificate, which nobody has stood up yet, and the
-/// `passkeys` plugin this app pins (2.22.3) exposes no PRF extension to
-/// back Mera's real vault scheme either — see mera_key_service.dart.
+/// stays unreachable from this screen: `SOKONI_RP_ID` now points at
+/// `sokoni.bitshada.com`, which does serve a Digital Asset Links file
+/// (`GET /.well-known/assetlinks.json` on the gateway itself), but no
+/// physical device has ever completed a passkey ceremony against it —
+/// that's what the `[kDebugMode]`-only spike button lower on this screen is
+/// for. Swap the primary button to it once that's proven. The `passkeys`
+/// plugin this app pins (2.22.3) also exposes no PRF extension to back
+/// Mera's real vault scheme — see mera_key_service.dart.
 class WelcomeScreen extends StatelessWidget {
   const WelcomeScreen({required this.config, super.key});
 
@@ -82,7 +83,22 @@ class WelcomeScreen extends StatelessWidget {
                       const SizedBox(height: 24),
                       if (kDebugMode) ...[
                         _DebugPreviewCard(config: config),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 8),
+                        // SPIKE, remove once the passkey path has a real
+                        // button: proving one real device can complete a
+                        // WebAuthn ceremony against a live assetlinks.json
+                        // is the one open unknown gating the "Create a
+                        // wallet" option — see docs/adr and CLAUDE.md's
+                        // Known gaps.
+                        Center(
+                          child: TextButton(
+                            onPressed: () => showPasskeySheet(context, config),
+                            child: const Text(
+                              '[spike] Try passkey registration',
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
                       ],
                       SizedBox(
                         width: double.infinity,

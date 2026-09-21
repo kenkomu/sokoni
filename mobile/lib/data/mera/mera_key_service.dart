@@ -17,8 +17,10 @@ import '../signer.dart';
 /// `passkeys` plugin (checked — v2.22.3 exposes no PRF extension at all, see
 /// CLAUDE.md's passkey findings for the WebAuthn calls it does expose), and a
 /// relying-party domain that actually serves Digital Asset Links for this
-/// app's signing certificate (the same `sokoni.app` blocker the original
-/// passkey flow has been stuck on).
+/// app's signing certificate. That domain now exists (`sokoni.bitshada.com`,
+/// via the gateway's own `/.well-known/assetlinks.json`) — this is now
+/// blocked only on the missing PRF support, not the domain, unlike the
+/// original passkey flow (see welcome_screen.dart).
 ///
 /// So this is a deliberate, documented substitution: the key is generated
 /// with a CSPRNG on-device and held in [FlutterSecureStorage], which is

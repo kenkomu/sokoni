@@ -131,6 +131,15 @@ type Config struct {
 	// How long the paymaster approval outlives the signing window, so an
 	// operation submitted at the last second still has time to land.
 	LandingMargin time.Duration
+	// AndroidPackageName and AndroidCertFingerprints back
+	// GET /.well-known/assetlinks.json — the file Android's Credential
+	// Manager checks before it will let this app create or use a passkey
+	// bound to SOKONI_RP_ID (see passkeys plugin's README). Both empty
+	// leaves the endpoint answering an empty statement list, which fails
+	// that check cleanly rather than the gateway refusing to start; nothing
+	// about passkeys is on the hot path.
+	AndroidPackageName      string
+	AndroidCertFingerprints []string
 }
 
 // Deps are the gateway's collaborators. Now is injectable so expiry can be
