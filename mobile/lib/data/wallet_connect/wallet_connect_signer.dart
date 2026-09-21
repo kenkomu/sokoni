@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:reown_core/reown_core.dart';
 import 'package:reown_sign/reown_sign.dart';
 import 'package:web3dart/crypto.dart';
 
@@ -43,7 +44,7 @@ class WalletConnectSigner implements Signer {
     // parameter order (confirmed against Reown's own example app, not
     // guessed: a wrong order here fails the exact same way a MetaMask
     // dapp's would).
-    final result = await _client.request(
+    final pending = _client.request(
       topic: _session.topic,
       chainId: chainId,
       request: SessionRequestParams(
@@ -51,6 +52,30 @@ class WalletConnectSigner implements Signer {
         params: [bytesToHex(hash, include0x: true), address],
       ),
     );
-    return hexToBytes(result as String);
+    // Deliberately after dispatching and before awaiting: the request has to
+    // be on the relay before the wallet is brought forward, or the person
+    // arrives to an app with nothing to approve yet. Same ordering
+    // reown_appkit uses (appkit_modal_impl.dart's _launchRequestOnWallet).
+    await _openWallet();
+    return hexToBytes(await pending as String);
+  }
+
+  /// Bring the connected wallet forward so the pending prompt is in front of
+  /// the person, rather than leaving them to find the app themselves.
+  ///
+  /// Best-effort on purpose. The wallet may publish no redirect, the scheme
+  /// may not resolve, or the session may have been made by scanning a QR
+  /// code from another device entirely — none of which is a signing failure,
+  /// so a miss here just leaves the request pending and switching apps
+  /// manual, exactly as it was before.
+  Future<void> _openWallet() async {
+    final redirect = _session.peer.metadata.redirect;
+    final link = redirect?.native ?? redirect?.universal;
+    if (link == null || link.isEmpty) return;
+    try {
+      await ReownCoreUtils.openURL(link);
+    } catch (_) {
+      // Swallowed: see above.
+    }
   }
 }

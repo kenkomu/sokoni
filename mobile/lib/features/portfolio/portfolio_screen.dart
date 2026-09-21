@@ -307,7 +307,10 @@ class _MarketTile extends StatelessWidget {
                     style: theme.textTheme.titleMedium,
                   ),
                   Text(
-                    'tick ${summary.market.tickSize}',
+                    // Raw tickSize is the on-chain 18-decimal string — same
+                    // trailing-zero-trim formatPrice already does for candle
+                    // closes, just never applied here.
+                    'tick ${formatPrice(summary.market.tickSize, maxDecimals: 18)}',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),

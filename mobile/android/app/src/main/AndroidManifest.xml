@@ -24,6 +24,23 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- How a wallet app hands the person back after they approve a
+                 connection or a signature. The scheme is published to the
+                 wallet as PairingMetadata.redirect (see
+                 lib/features/onboarding/wallet_connect_sheet.dart); without
+                 this filter that redirect has nothing to resolve to and the
+                 person is left in the wallet app.
+
+                 MainActivity is singleTop, so this delivers onNewIntent to
+                 the already-running app rather than starting a second one —
+                 which is what keeps the pending WalletConnect session, and
+                 the signature being awaited, alive across the round trip. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="sokoni"/>
+            </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
@@ -40,6 +57,20 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- Android 11+ hides other installed apps unless they are declared
+             here. Without this, resolving a wallet's own deep link (to jump
+             into it when a signature is waiting) silently finds nothing —
+             `wc` covers pairing, and a connected wallet's redirect scheme is
+             matched by the generic VIEW/BROWSABLE entry below. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="wc"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <category android:name="android.intent.category.BROWSABLE"/>
+            <data android:scheme="https"/>
         </intent>
     </queries>
 </manifest>

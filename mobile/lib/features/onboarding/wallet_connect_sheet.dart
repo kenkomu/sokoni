@@ -95,6 +95,14 @@ class _WalletConnectSheetState extends State<_WalletConnectSheet>
               'Trade on Monad with your fingerprint. Balances in AUSD.',
           url: 'https://sokoni.app',
           icons: [],
+          // Where a wallet sends the person back to once they've approved.
+          // This rides along in the session proposal, so it covers the whole
+          // session — the first connection and every later signature — not
+          // just this pairing. The scheme is registered in
+          // android/app/src/main/AndroidManifest.xml and ios/Runner/Info.plist;
+          // honouring it is the wallet's choice, so the flow still has to
+          // work when nothing comes back (see wallet_connect_signer.dart).
+          redirect: Redirect(native: 'sokoni://'),
         ),
       );
       if (!mounted) return;
