@@ -1,24 +1,13 @@
-import 'dart:async';
-
 import 'package:flutter/foundation.dart';
 
 import '../../core/config.dart';
 import '../../core/demo_mode.dart';
 import '../../data/api/sokoni_api.dart';
-import '../../data/repositories/demo_market_data.dart';
-import '../../data/repositories/market_summary.dart';
 import '../onboarding/passkey_controller.dart' show describeFailure;
 
 @immutable
 class PortfolioState {
-  const PortfolioState({
-    this.summaries,
-    this.balances,
-    this.loading = false,
-    this.error,
-  });
-
-  final List<MarketSummary>? summaries;
+  const PortfolioState({this.balances, this.loading = false, this.error});
 
   /// Null until a real balances fetch completes — distinct from an empty
   /// list, which means "fetched, holds nothing of any sponsored token".
@@ -27,19 +16,21 @@ class PortfolioState {
   final String? error;
 
   PortfolioState copyWith({
-    List<MarketSummary>? summaries,
     List<AccountBalance>? balances,
     bool? loading,
     String? error,
     bool clearError = false,
   }) => PortfolioState(
-    summaries: summaries ?? this.summaries,
     balances: balances ?? this.balances,
     loading: loading ?? this.loading,
     error: clearError ? null : (error ?? this.error),
   );
 }
 
+/// Portfolio asks one question — what does this account hold — so it makes
+/// exactly one request. It used to also pull the whole market list, for a
+/// copy of the Markets tab that no longer sits on this screen (see
+/// _ExploreMarketsCard in portfolio_screen.dart).
 class PortfolioController extends ChangeNotifier {
   PortfolioController({
     required AppConfig config,
@@ -70,44 +61,17 @@ class PortfolioController extends ChangeNotifier {
   }
 
   Future<void> load() async {
-    if (demoModeEnabled.value) {
-      _set(
-        PortfolioState(
-          summaries: demoMarketSummaries(),
-          balances: const [],
-          loading: false,
-        ),
-      );
+    final address = accountAddress;
+    if (demoModeEnabled.value || address == null) {
+      _set(const PortfolioState(balances: [], loading: false));
       return;
     }
     _set(_state.copyWith(loading: true, clearError: true));
     try {
-      final address = accountAddress;
-      final results = await (
-        fetchMarketSummaries(_api),
-        address == null
-            ? Future.value(const <AccountBalance>[])
-            : _api.balances(address).then((b) => b.balances),
-      ).wait;
-      _set(
-        PortfolioState(
-          summaries: results.$1,
-          balances: results.$2,
-          loading: false,
-        ),
-      );
+      final balances = await _api.balances(address);
+      _set(PortfolioState(balances: balances.balances, loading: false));
     } catch (e) {
-      // (Future, Future).wait wraps either side's failure in a
-      // ParallelWaitError rather than letting it propagate as-is —
-      // describeFailure needs the original ApiException, not that wrapper,
-      // to produce the same message a single-request failure would.
-      final original =
-          e is ParallelWaitError
-              ? ((e.errors as (AsyncError?, AsyncError?)).$1?.error ??
-                  (e.errors as (AsyncError?, AsyncError?)).$2?.error ??
-                  e)
-              : e;
-      _set(_state.copyWith(loading: false, error: describeFailure(original)));
+      _set(_state.copyWith(loading: false, error: describeFailure(e)));
     }
   }
 }

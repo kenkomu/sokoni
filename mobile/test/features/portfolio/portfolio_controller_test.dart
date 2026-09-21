@@ -11,76 +11,27 @@ const _config = AppConfig(
   relyingPartyId: 'sokoni.app',
 );
 
+Reply _balancesOf(String amount) => (
+  status: 200,
+  body: {
+    'address': '0xACC7',
+    'balances': [
+      {
+        'token': {'address': '0xTOK', 'symbol': 'AUSD', 'decimals': 6},
+        'amount': amount,
+      },
+    ],
+  },
+);
+
 void main() {
-  test('load populates the markets available to trade', () async {
+  test('load reads the account balances', () async {
     final gw =
-        FakeGateway()
-          ..on(
-            'GET',
-            '/v1/markets',
-            (_) => (
-              status: 200,
-              body: {
-                'markets': [
-                  {
-                    'symbol': 'MON-AUSD',
-                    'baseToken': '0x0',
-                    'quoteToken': '0x1',
-                    'baseDecimals': 18,
-                    'quoteDecimals': 6,
-                    'tickSize': '0.000001',
-                    'minQty': '0.000002',
-                  },
-                ],
-              },
-            ),
-          )
-          ..on(
-            'GET',
-            '/v1/markets/MON-AUSD/candles',
-            (_) => (status: 200, body: {'candles': <Object>[]}),
-          );
-    final c = PortfolioController(
-      config: _config,
-      accountAddress: null,
-      api: gw.api(),
-    );
-
-    await c.load();
-
-    expect(c.state.summaries, hasLength(1));
-    expect(c.state.balances, isEmpty);
-    expect(c.state.error, isNull);
-  });
-
-  test('load with an account address fetches its balances too', () async {
-    final gw =
-        FakeGateway()
-          ..on(
-            'GET',
-            '/v1/markets',
-            (_) => (status: 200, body: {'markets': <Object>[]}),
-          )
-          ..on(
-            'GET',
-            '/v1/accounts/0xACC7/balances',
-            (_) => (
-              status: 200,
-              body: {
-                'address': '0xACC7',
-                'balances': [
-                  {
-                    'token': {
-                      'address': '0xTOK',
-                      'symbol': 'AUSD',
-                      'decimals': 6,
-                    },
-                    'amount': '5000000',
-                  },
-                ],
-              },
-            ),
-          );
+        FakeGateway()..on(
+          'GET',
+          '/v1/accounts/0xACC7/balances',
+          (_) => _balancesOf('5000000'),
+        );
     final c = PortfolioController(
       config: _config,
       accountAddress: '0xACC7',
@@ -95,19 +46,8 @@ void main() {
     expect(c.state.balances!.single.amount, '5000000');
   });
 
-  test('a gateway failure surfaces its message', () async {
-    final gw =
-        FakeGateway()..on(
-          'GET',
-          '/v1/markets',
-          (_) => (
-            status: 502,
-            body: {
-              'error': 'no_market_data',
-              'message': 'market data is not available',
-            },
-          ),
-        );
+  test('an account with no address never calls the gateway', () async {
+    final gw = FakeGateway();
     final c = PortfolioController(
       config: _config,
       accountAddress: null,
@@ -116,7 +56,35 @@ void main() {
 
     await c.load();
 
-    expect(c.state.summaries, isNull);
-    expect(c.state.error, 'market data is not available');
+    // The debug preview account has no registered address to ask about;
+    // asking anyway would just be a confusing 404.
+    expect(gw.requests, isEmpty);
+    expect(c.state.balances, isEmpty);
+    expect(c.state.error, isNull);
+  });
+
+  test('a gateway failure surfaces its message', () async {
+    final gw =
+        FakeGateway()..on(
+          'GET',
+          '/v1/accounts/0xACC7/balances',
+          (_) => (
+            status: 502,
+            body: {
+              'error': 'no_chain',
+              'message': 'could not read the token balance',
+            },
+          ),
+        );
+    final c = PortfolioController(
+      config: _config,
+      accountAddress: '0xACC7',
+      api: gw.api(),
+    );
+
+    await c.load();
+
+    expect(c.state.balances, isNull);
+    expect(c.state.error, 'could not read the token balance');
   });
 }

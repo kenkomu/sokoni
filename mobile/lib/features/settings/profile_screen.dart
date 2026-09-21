@@ -166,13 +166,29 @@ class ProfileScreen extends StatelessWidget {
                   const SizedBox(height: 8),
                   const Divider(),
                   const SizedBox(height: 8),
-                  Text(
-                    'Account address',
-                    style: theme.textTheme.labelLarge?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Account address',
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                      TextButton.icon(
+                        onPressed: () => copyAddress(context, account.address),
+                        icon: const Icon(Icons.copy_rounded, size: 16),
+                        label: const Text('Copy'),
+                        style: TextButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 4),
+                  // Stays selectable as well as copyable: on a screen whose
+                  // job is showing what the account *is*, being able to grab
+                  // half an address to compare against a block explorer is
+                  // worth keeping alongside the one-tap copy.
                   SelectableText(
                     account.address,
                     style: theme.textTheme.bodyMedium?.copyWith(

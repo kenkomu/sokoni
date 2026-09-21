@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../../core/config.dart';
 import '../../core/money.dart';
 import '../../data/api/sokoni_api.dart';
-import '../../data/repositories/market_summary.dart';
 import '../../design/format.dart';
 import '../../design/skeleton.dart';
 import '../../design/token_avatar.dart';
@@ -80,32 +79,8 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
               ),
               const SizedBox(height: 12),
               ..._balancesBody(state),
-              const SizedBox(height: 24),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Available markets',
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: widget.onViewMarkets,
-                    child: const Text('Trade'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'Positions aren’t tracked yet — this lists what you can '
-                'trade, not what you hold.',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 12),
-              ..._marketsBody(state),
+              const SizedBox(height: 20),
+              _ExploreMarketsCard(onViewMarkets: widget.onViewMarkets),
             ],
           ),
         ),
@@ -142,13 +117,15 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
     // Only tokens actually held — a wall of "0.00 AUSD / 0.00 USDC" rows
     // says nothing a new account doesn't already know.
     final held =
-        (state.balances ?? const []).where(
-          (b) =>
-              !Money.fromBaseUnits(
-                BigInt.parse(b.amount),
-                b.token.decimals,
-              ).isZero,
-        ).toList();
+        (state.balances ?? const [])
+            .where(
+              (b) =>
+                  !Money.fromBaseUnits(
+                    BigInt.parse(b.amount),
+                    b.token.decimals,
+                  ).isZero,
+            )
+            .toList();
     if (held.isEmpty) {
       return [
         Text(
@@ -168,30 +145,70 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
         ),
     ];
   }
+}
 
-  List<Widget> _marketsBody(PortfolioState state) {
-    if (state.loading && state.summaries == null) {
-      return const [SkeletonMarketList()];
-    }
-    if (state.error != null && state.summaries == null) {
-      return [
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 24),
-          child: Text(
-            state.error!,
-            style: TextStyle(color: Theme.of(context).colorScheme.error),
+/// Portfolio's one way out to trading.
+///
+/// This replaces a full copy of the market list that used to sit here. Two
+/// things were wrong with it: it rendered as the same stack of tiles as the
+/// balances directly above, so "what you can trade" read as "what you hold"
+/// at a glance — and the only number it showed per market was tick size,
+/// which answers a question nobody has while looking at their portfolio.
+/// The Markets tab already does this properly, with live prices.
+class _ExploreMarketsCard extends StatelessWidget {
+  const _ExploreMarketsCard({required this.onViewMarkets});
+
+  final VoidCallback onViewMarkets;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Material(
+      color: theme.colorScheme.secondaryContainer,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: onViewMarkets,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Icon(
+                Icons.candlestick_chart,
+                color: theme.colorScheme.onSecondaryContainer,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Explore markets',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: theme.colorScheme.onSecondaryContainer,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Live prices, charts, and buy or sell in a tap.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSecondaryContainer
+                            .withValues(alpha: 0.85),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.chevron_right,
+                color: theme.colorScheme.onSecondaryContainer,
+              ),
+            ],
           ),
         ),
-      ];
-    }
-    final summaries = state.summaries ?? const [];
-    return [
-      for (final s in summaries)
-        Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: _MarketTile(summary: s),
-        ),
-    ];
+      ),
+    );
   }
 }
 
@@ -220,11 +237,38 @@ class _AccountCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          Text(
-            shortAddress(account.address),
-            style: theme.textTheme.headlineSmall?.copyWith(
-              color: theme.colorScheme.onPrimary,
-              fontFeatures: const [FontFeature.tabularFigures()],
+          // The whole row is the tap target, not just the icon: this is the
+          // one screen that tells people to send funds here, so copying the
+          // address is the main thing they came to do.
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () => copyAddress(context, account.address),
+              borderRadius: BorderRadius.circular(10),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        shortAddress(account.address),
+                        style: theme.textTheme.headlineSmall?.copyWith(
+                          color: theme.colorScheme.onPrimary,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Icon(
+                      Icons.copy_rounded,
+                      size: 20,
+                      color: theme.colorScheme.onPrimary.withValues(
+                        alpha: 0.85,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
           const SizedBox(height: 8),
@@ -266,56 +310,15 @@ class _BalanceTile extends StatelessWidget {
             TokenAvatar(symbol: balance.token.symbol),
             const SizedBox(width: 12),
             Expanded(
-              child: Text(balance.token.symbol, style: theme.textTheme.titleMedium),
+              child: Text(
+                balance.token.symbol,
+                style: theme.textTheme.titleMedium,
+              ),
             ),
             Text(
               money.toString(),
               style: theme.textTheme.titleMedium?.copyWith(
                 fontFeatures: const [FontFeature.tabularFigures()],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _MarketTile extends StatelessWidget {
-  const _MarketTile({required this.summary});
-
-  final MarketSummary summary;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Material(
-      color: theme.colorScheme.surfaceContainerLow,
-      borderRadius: BorderRadius.circular(12),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          children: [
-            TokenAvatar(symbol: summary.market.baseSymbol),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    summary.market.symbol,
-                    style: theme.textTheme.titleMedium,
-                  ),
-                  Text(
-                    // Raw tickSize is the on-chain 18-decimal string — same
-                    // trailing-zero-trim formatPrice already does for candle
-                    // closes, just never applied here.
-                    'tick ${formatPrice(summary.market.tickSize, maxDecimals: 18)}',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
               ),
             ),
           ],
