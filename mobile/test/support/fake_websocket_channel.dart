@@ -15,11 +15,20 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 class FakeWebSocketChannel
     with StreamChannelMixin<dynamic>
     implements WebSocketChannel {
+  /// [readyError], set, makes [ready] reject instead of resolve — a DNS
+  /// lookup failure or a refused connection look exactly like this: the
+  /// channel exists, but never actually opens, and [stream] never emits
+  /// anything at all (no message, no error, no done) because there was
+  /// never a socket to carry one.
+  FakeWebSocketChannel({Object? readyError}) : _readyError = readyError;
+
+  final Object? _readyError;
   final _incoming = StreamController<dynamic>.broadcast();
   final sentToServer = <dynamic>[];
   var closed = false;
 
   void pushFromServer(String message) => _incoming.add(message);
+  void pushError(Object error) => _incoming.addError(error);
 
   @override
   Stream get stream => _incoming.stream;
@@ -28,7 +37,10 @@ class FakeWebSocketChannel
   WebSocketSink get sink => _FakeSink(this);
 
   @override
-  Future<void> get ready => Future.value();
+  Future<void> get ready {
+    final err = _readyError;
+    return err == null ? Future.value() : Future.error(err);
+  }
 
   @override
   String? get protocol => null;

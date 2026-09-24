@@ -30,8 +30,20 @@ class MarketStream {
 
   void connect() {
     _reconnect?.cancel();
-    _channel = _channelFactory(Uri.parse(_url));
-    _sub = _channel!.stream.listen(
+    final channel = _channelFactory(Uri.parse(_url));
+    _channel = channel;
+    // A failure before the socket ever opens (DNS lookup, connection
+    // refused) doesn't reliably reach .stream.listen's onError below, and
+    // .onDone may lag far behind it or never fire at all for a pure
+    // connect-time failure — there's no socket to close. Caught here
+    // instead, this was surfacing as a genuinely unhandled top-level
+    // exception, over and over with no backoff, since nothing ever routed
+    // it into _scheduleReconnect. `ready`'s own doc names exactly this
+    // failure mode.
+    channel.ready.catchError((Object _) {
+      if (identical(_channel, channel)) _scheduleReconnect();
+    });
+    _sub = channel.stream.listen(
       _onMessage,
       onDone: _scheduleReconnect,
       onError: (_) => _scheduleReconnect(),
@@ -65,6 +77,10 @@ class MarketStream {
     _sub?.cancel();
     _channel = null;
     _lastSeq = null;
+    // ready's catchError and the stream's onError/onDone can both fire for
+    // the same underlying failure — cancelling any timer already in flight
+    // keeps a double call from stacking two eventual connect()s.
+    _reconnect?.cancel();
 
     // Full jitter, capped at 30s. Avoids a reconnect convoy after an outage.
     final backoffMs = (500 * (1 << _attempt.clamp(0, 6))).clamp(500, 30000);
