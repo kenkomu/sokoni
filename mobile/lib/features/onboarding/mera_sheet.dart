@@ -33,9 +33,7 @@ class _MeraSheet extends StatefulWidget {
 }
 
 class _MeraSheetState extends State<_MeraSheet> {
-  late final MeraController _controller = MeraController(
-    config: widget.config,
-  );
+  late final MeraController _controller = MeraController(config: widget.config);
 
   bool _navigated = false;
 
@@ -78,6 +76,7 @@ class _MeraSheetState extends State<_MeraSheet> {
                 address: meraAccount.address,
                 deployed: meraAccount.deployed,
               ),
+              signer: _controller.state.signer,
               onLogout:
                   () => navigator.pushAndRemoveUntil(
                     MaterialPageRoute(

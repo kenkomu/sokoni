@@ -1,9 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../../core/config.dart';
-import '../../core/demo_mode.dart';
 import '../../data/api/sokoni_api.dart';
-import '../../data/repositories/demo_market_data.dart';
 import '../../data/ws/market_stream.dart';
 import '../onboarding/passkey_controller.dart' show describeFailure;
 
@@ -118,24 +116,6 @@ class TradeController extends ChangeNotifier {
     if (_streaming && intervalChanged) {
       _stream.subscribe(['candles:${_state.symbol}:$useInterval']);
     }
-    if (demoModeEnabled.value) {
-      // A fixed series, not the (currently empty) real REST snapshot — see
-      // CLAUDE.md's Known gaps: the testnet markets have no real trades yet.
-      final series = demoCandleSeries(_state.symbol);
-      final candles =
-          series.length <= useLimit
-              ? series
-              : series.sublist(series.length - useLimit);
-      _set(
-        _state.copyWith(
-          candles: candles,
-          trades: demoTrades(_state.symbol),
-          streamStatus: StreamStatus.live,
-          loading: false,
-        ),
-      );
-      return;
-    }
     try {
       final candles = await _api.candles(
         symbol: _state.symbol,
@@ -150,10 +130,6 @@ class TradeController extends ChangeNotifier {
   }
 
   void subscribeLive() {
-    // Demo candles/trades are static — there's nothing for a live socket to
-    // deliver, and connecting anyway would just show "Disconnected" over
-    // data that was never live in the first place.
-    if (demoModeEnabled.value) return;
     _streaming = true;
     _stream.events.listen(_onEvent);
     _stream.connect();

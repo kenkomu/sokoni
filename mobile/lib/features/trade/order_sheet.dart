@@ -2,28 +2,38 @@ import 'package:flutter/material.dart';
 
 import '../../core/config.dart';
 import '../../data/api/sokoni_api.dart';
+import '../../data/signer.dart';
 import '../onboarding/mera_controller.dart';
 
 /// Buy or sell [market] at the current market price — a market order only,
 /// no limit orders yet (see CLAUDE.md's Known gaps). Reuses [MeraController]
-/// rather than a dedicated order controller: the key it needs is already on
-/// this device from onboarding, [MeraController.loadOrCreateKey] retrieves
-/// it (never minting a second one, same guarantee onboarding relies on), and
-/// [MeraController.sendTrade] is the prepare/sign/submit/watch loop a trade
-/// needs, identical in shape to the transfer one — the two only differ in
-/// which gateway intent they build.
+/// rather than a dedicated order controller: [MeraController.sendTrade] is
+/// the prepare/sign/submit/watch loop a trade needs, identical in shape to
+/// the transfer one — the two only differ in which gateway intent they
+/// build. [signer] is the one already established at sign-in (an on-device
+/// key or a connected wallet) — passed in rather than reloaded, so a trade
+/// always signs with the same key the account's balance actually belongs
+/// to; a fresh [MeraController.loadOrCreateKey] here would happily mint or
+/// load an unrelated on-device key with no funds of its own.
 Future<void> showOrderSheet(
   BuildContext context, {
   required AppConfig config,
   required MarketInfo market,
   required String side,
+  required Signer signer,
 }) {
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
     useSafeArea: true,
-    builder: (_) => _OrderSheet(config: config, market: market, side: side),
+    builder:
+        (_) => _OrderSheet(
+          config: config,
+          market: market,
+          side: side,
+          signer: signer,
+        ),
   );
 }
 
@@ -32,20 +42,20 @@ class _OrderSheet extends StatefulWidget {
     required this.config,
     required this.market,
     required this.side,
+    required this.signer,
   });
 
   final AppConfig config;
   final MarketInfo market;
   final String side;
+  final Signer signer;
 
   @override
   State<_OrderSheet> createState() => _OrderSheetState();
 }
 
 class _OrderSheetState extends State<_OrderSheet> {
-  late final MeraController _controller = MeraController(
-    config: widget.config,
-  );
+  late final MeraController _controller = MeraController(config: widget.config);
   final _amountController = TextEditingController();
   bool _landed = false;
 
@@ -65,7 +75,10 @@ class _OrderSheetState extends State<_OrderSheet> {
   void initState() {
     super.initState();
     _controller.addListener(_onChanged);
-    _controller.loadOrCreateKey();
+    // The already-established signer, not a freshly loaded/minted on-device
+    // key — see this file's top doc comment for why that distinction is the
+    // whole point.
+    _controller.useWallet(widget.signer);
   }
 
   void _onChanged() {
@@ -86,6 +99,10 @@ class _OrderSheetState extends State<_OrderSheet> {
   void _submit() {
     final amount = _amountController.text.trim();
     if (amount.isEmpty) return;
+    // Closes the keyboard as soon as it stops being needed, well ahead of
+    // the pop this eventually leads to — see build()'s PopScope comment for
+    // why that gap matters.
+    FocusManager.instance.primaryFocus?.unfocus();
     _controller.sendTrade(
       market: widget.market.symbol,
       side: widget.side,
@@ -100,82 +117,103 @@ class _OrderSheetState extends State<_OrderSheet> {
     final state = _controller.state;
     final color = _isBuy ? theme.colorScheme.primary : theme.colorScheme.error;
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        24,
-        0,
-        24,
-        24 + MediaQuery.of(context).viewInsets.bottom,
-      ),
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              '${_isBuy ? 'Buy' : 'Sell'} ${widget.market.baseSymbol}',
-              style: theme.textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.w700,
-                color: color,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Market order — fills at the current price, no minimum '
-              'received guaranteed yet.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 20),
-            if (_landed) ...[
-              _SuccessNotice(status: state.op),
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Done'),
+    // Every way out of this sheet — the Done button, dragging it down,
+    // tapping the scrim, the system back gesture — has to close the amount
+    // field's keyboard *before* the route actually pops. Skipping that step
+    // is what produced a real, reproduced bug on a real device: on Android
+    // 15+ (edge-to-edge is mandatory there, no opt-out) plus
+    // windowSoftInputMode="adjustResize", popping a route while a TextField
+    // is still focused races the IME-close animation against the window
+    // resize. Lose that race and the window can get stuck permanently
+    // shrunk to roughly the keyboard-open height — every screen after that,
+    // for the rest of the app session, renders squeezed into a sliver at
+    // the top with the remainder blank, and nothing short of a device
+    // reboot clears it. canPop starts false specifically so unfocus() is
+    // guaranteed to run and settle before the pop begins, not race it.
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        FocusManager.instance.primaryFocus?.unfocus();
+        Navigator.of(context).pop(result);
+      },
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          24,
+          0,
+          24,
+          24 + MediaQuery.of(context).viewInsets.bottom,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '${_isBuy ? 'Buy' : 'Sell'} ${widget.market.baseSymbol}',
+                style: theme.textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: color,
                 ),
               ),
-            ] else ...[
-              TextField(
-                controller: _amountController,
-                enabled: !state.isBusy,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
-                decoration: InputDecoration(
-                  labelText: '$_spendSymbol to ${_isBuy ? 'spend' : 'sell'}',
-                  border: const OutlineInputBorder(),
+              const SizedBox(height: 6),
+              Text(
+                'Market order — fills at the current price, no minimum '
+                'received guaranteed yet.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                height: 52,
-                child: FilledButton(
-                  style: FilledButton.styleFrom(backgroundColor: color),
-                  onPressed: state.isBusy ? null : _submit,
-                  child:
-                      state.isBusy
-                          ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                          : Text(_isBuy ? 'Buy' : 'Sell'),
-                ),
-              ),
-              if (state.error != null) ...[
+              const SizedBox(height: 20),
+              if (_landed) ...[
+                _SuccessNotice(status: state.op),
                 const SizedBox(height: 16),
-                _ErrorNotice(message: state.error!),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('Done'),
+                  ),
+                ),
+              ] else ...[
+                TextField(
+                  controller: _amountController,
+                  enabled: !state.isBusy,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: InputDecoration(
+                    labelText: '$_spendSymbol to ${_isBuy ? 'spend' : 'sell'}',
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: FilledButton(
+                    style: FilledButton.styleFrom(backgroundColor: color),
+                    onPressed: state.isBusy ? null : _submit,
+                    child:
+                        state.isBusy
+                            ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                            : Text(_isBuy ? 'Buy' : 'Sell'),
+                  ),
+                ),
+                if (state.error != null) ...[
+                  const SizedBox(height: 16),
+                  _ErrorNotice(message: state.error!),
+                ],
               ],
             ],
-          ],
+          ),
         ),
       ),
     );

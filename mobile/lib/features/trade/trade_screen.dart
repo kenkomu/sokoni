@@ -2,10 +2,9 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/config.dart';
-import '../../core/demo_mode.dart';
 import '../../core/favourites.dart';
 import '../../data/api/sokoni_api.dart';
-import '../../design/demo_badge.dart';
+import '../../data/signer.dart';
 import '../../design/format.dart';
 import '../../design/price_flash.dart';
 import '../../design/theme.dart';
@@ -15,14 +14,23 @@ import 'order_sheet.dart';
 import 'trade_controller.dart';
 
 /// The kit's "Coin page" — price, chart, recent trades, and what market
-/// metadata actually exists (tick size, min qty, contracts). Buy/Sell are
-/// visible to match the kit's layout but disabled: there is no order
-/// placement endpoint yet (see CLAUDE.md's Known gaps, `internal/orders`).
+/// metadata actually exists (tick size, min qty, contracts), plus Buy/Sell,
+/// which place a real sponsored market order via [showOrderSheet].
 class TradeScreen extends StatefulWidget {
-  const TradeScreen({required this.config, required this.market, super.key});
+  const TradeScreen({
+    required this.config,
+    required this.market,
+    this.signer,
+    super.key,
+  });
 
   final AppConfig config;
   final MarketInfo market;
+
+  /// See AppShell.signer. Null (passkey or debug-preview accounts) disables
+  /// Buy/Sell rather than trading with an unrelated key — see
+  /// order_sheet.dart.
+  final Signer? signer;
 
   @override
   State<TradeScreen> createState() => _TradeScreenState();
@@ -112,13 +120,6 @@ class _TradeScreenState extends State<TradeScreen> {
                 : ListView(
                   padding: const EdgeInsets.all(16),
                   children: [
-                    if (demoModeEnabled.value) ...[
-                      const Align(
-                        alignment: Alignment.centerLeft,
-                        child: DemoBadge(),
-                      ),
-                      const SizedBox(height: 8),
-                    ],
                     _PriceHeader(candles: state.candles, trades: state.trades),
                     const SizedBox(height: 12),
                     _TimeRangeChips(
@@ -158,7 +159,11 @@ class _TradeScreenState extends State<TradeScreen> {
                   ],
                 ),
       ),
-      bottomNavigationBar: _BuySellBar(config: widget.config, market: market),
+      bottomNavigationBar: _BuySellBar(
+        config: widget.config,
+        market: market,
+        signer: widget.signer,
+      ),
     );
   }
 }
@@ -356,43 +361,65 @@ class _StatRow extends StatelessWidget {
 /// with an explanation rather than either hidden (which would silently
 /// diverge from the design) or wired to an endpoint that doesn't exist.
 class _BuySellBar extends StatelessWidget {
-  const _BuySellBar({required this.config, required this.market});
+  const _BuySellBar({required this.config, required this.market, this.signer});
 
   final AppConfig config;
   final MarketInfo market;
+  final Signer? signer;
 
   @override
   Widget build(BuildContext context) {
+    final s = signer;
     return SafeArea(
       top: false,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Expanded(
-              child: FilledButton(
-                onPressed:
-                    () => showOrderSheet(
-                      context,
-                      config: config,
-                      market: market,
-                      side: 'buy',
-                    ),
-                child: const Text('Buy'),
+            if (s == null)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'Trading isn\'t available for this account yet.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 12),
+                ),
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: FilledButton.tonal(
-                onPressed:
-                    () => showOrderSheet(
-                      context,
-                      config: config,
-                      market: market,
-                      side: 'sell',
-                    ),
-                child: const Text('Sell'),
-              ),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton(
+                    onPressed:
+                        s == null
+                            ? null
+                            : () => showOrderSheet(
+                              context,
+                              config: config,
+                              market: market,
+                              side: 'buy',
+                              signer: s,
+                            ),
+                    child: const Text('Buy'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton.tonal(
+                    onPressed:
+                        s == null
+                            ? null
+                            : () => showOrderSheet(
+                              context,
+                              config: config,
+                              market: market,
+                              side: 'sell',
+                              signer: s,
+                            ),
+                    child: const Text('Sell'),
+                  ),
+                ),
+              ],
             ),
           ],
         ),

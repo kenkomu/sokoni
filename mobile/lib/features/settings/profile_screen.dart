@@ -1,8 +1,6 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/config.dart';
-import '../../core/demo_mode.dart';
 import '../../core/theme_mode.dart';
 import '../../data/api/sokoni_api.dart';
 import '../../design/format.dart';
@@ -72,24 +70,6 @@ class ProfileScreen extends StatelessWidget {
             const SizedBox(height: 16),
             const _AppearanceTile(),
             const Divider(),
-            if (kDebugMode) ...[
-              ValueListenableBuilder<bool>(
-                valueListenable: demoModeEnabled,
-                builder:
-                    (context, enabled, _) => SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      secondary: const Icon(Icons.auto_graph_outlined),
-                      title: const Text('Demo data'),
-                      subtitle: const Text(
-                        'Debug build only — shows sample charts/prices '
-                        'instead of the (currently empty) real markets.',
-                      ),
-                      value: enabled,
-                      onChanged: (v) => demoModeEnabled.value = v,
-                    ),
-              ),
-              const Divider(),
-            ],
             _MenuTile(
               icon: Icons.shield_outlined,
               label: 'Security',

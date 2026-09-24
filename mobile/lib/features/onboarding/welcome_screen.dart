@@ -93,9 +93,7 @@ class WelcomeScreen extends StatelessWidget {
                         Center(
                           child: TextButton(
                             onPressed: () => showPasskeySheet(context, config),
-                            child: const Text(
-                              '[spike] Try passkey registration',
-                            ),
+                            child: const Text('Create a wallet'),
                           ),
                         ),
                         const SizedBox(height: 8),

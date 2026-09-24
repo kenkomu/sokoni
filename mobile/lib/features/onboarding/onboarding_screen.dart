@@ -47,11 +47,21 @@ class _PasskeySheetState extends State<_PasskeySheet> {
   void initState() {
     super.initState();
     _controller.addListener(_onChanged);
-    // Ask up front, so an unsupported device says so before the user commits
-    // to a flow that cannot finish.
-    _controller.checkAvailability();
     // Needs no auth, so this loads immediately.
     _controller.loadConfig();
+    _start();
+  }
+
+  // Opening this sheet *is* "create a wallet" — the same reasoning as
+  // wallet_connect_sheet.dart's single-tap connect: a person who tapped
+  // "Create a wallet" on the screen behind this one already decided, and
+  // parking on a second "Create passkey" button only makes them confirm
+  // their own tap. Availability is still checked first, so an unsupported
+  // device says so instead of the biometric prompt failing unexplained.
+  Future<void> _start() async {
+    await _controller.checkAvailability();
+    if (!mounted || _controller.state.available == false) return;
+    await _controller.createPasskey();
   }
 
   void _onChanged() {
@@ -150,7 +160,14 @@ class _PasskeySheetState extends State<_PasskeySheet> {
                         ? const _Spinner()
                         : const Icon(Icons.fingerprint),
                 label: Text(
-                  registered == null ? 'Create passkey' : 'Create another',
+                  registered != null
+                      ? 'Create another'
+                      // Reached only after the automatic attempt in _start
+                      // has already failed once — this is now a retry, not
+                      // the first ask.
+                      : state.error != null
+                      ? 'Try again'
+                      : 'Create passkey',
                   style: const TextStyle(fontSize: 16),
                 ),
               ),

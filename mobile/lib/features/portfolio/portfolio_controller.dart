@@ -1,7 +1,6 @@
 import 'package:flutter/foundation.dart';
 
 import '../../core/config.dart';
-import '../../core/demo_mode.dart';
 import '../../data/api/sokoni_api.dart';
 import '../onboarding/passkey_controller.dart' show describeFailure;
 
@@ -62,7 +61,7 @@ class PortfolioController extends ChangeNotifier {
 
   Future<void> load() async {
     final address = accountAddress;
-    if (demoModeEnabled.value || address == null) {
+    if (address == null) {
       _set(const PortfolioState(balances: [], loading: false));
       return;
     }

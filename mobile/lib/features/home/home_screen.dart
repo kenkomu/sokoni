@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../core/config.dart';
-import '../../core/demo_mode.dart';
 import '../../data/api/sokoni_api.dart';
 import '../../data/repositories/market_summary.dart';
-import '../../design/demo_badge.dart';
+import '../../data/signer.dart';
 import '../../design/format.dart';
 import '../../design/skeleton.dart';
 import '../../design/sparkline.dart';
@@ -22,12 +21,17 @@ class HomeScreen extends StatefulWidget {
     required this.config,
     required this.account,
     required this.onViewMarkets,
+    this.signer,
     super.key,
   });
 
   final AppConfig config;
   final AccountInfo account;
   final VoidCallback onViewMarkets;
+
+  /// See AppShell.signer — forwarded into TradeScreen so a trade signs with
+  /// the same key this account's balance belongs to.
+  final Signer? signer;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -67,19 +71,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 onViewMarkets: widget.onViewMarkets,
               ),
               const SizedBox(height: 24),
-              Row(
-                children: [
-                  Text(
-                    'Markets',
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  if (demoModeEnabled.value) ...[
-                    const SizedBox(width: 8),
-                    const DemoBadge(),
-                  ],
-                ],
+              Text(
+                'Markets',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 8),
               ..._marketsBody(state),
@@ -128,6 +124,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         (_) => TradeScreen(
                           config: widget.config,
                           market: s.market,
+                          signer: widget.signer,
                         ),
                   ),
                 ),

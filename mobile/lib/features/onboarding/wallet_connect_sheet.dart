@@ -193,6 +193,7 @@ class _WalletConnectSheetState extends State<_WalletConnectSheet>
                 address: meraAccount.address,
                 deployed: meraAccount.deployed,
               ),
+              signer: _controller.state.signer,
               onLogout:
                   () => navigator.pushAndRemoveUntil(
                     MaterialPageRoute(
