@@ -133,11 +133,13 @@ type enabledMarket struct {
 }
 
 // candleIntervalsS are every bucket size populated, chosen to match the
-// trade screen's four time-range tabs (1H/6H/24H/All) at a readable
+// trade screen's five time-range tabs (1H/6H/24H/1W/30D) at a readable
 // resolution each -- e.g. 1H showing 60 one-minute candles, not 60 daily
-// ones. Every value here is one Kuru's own candlestick API documents too
-// (docs.kuru.io/api-reference/market-data/get-candlestick-data: 1m, 5m, 15m,
-// 30m, 1h, 4h, 1d, 1w), trimmed to the four this app's UI actually offers.
+// ones. 1W and 30D reuse the 3600s and 86400s buckets rather than adding
+// Kuru's own 1w bucket (docs.kuru.io/api-reference/market-data/get-
+// candlestick-data: 1m, 5m, 15m, 30m, 1h, 4h, 1d, 1w) -- a bucket added now
+// would have no history until a week after it started being populated, and
+// 168 hourly or 30 daily candles cover the same range just as well.
 // interval_s is a column, not a constant, precisely so adding one here is a
 // new row shape, not a schema change.
 var candleIntervalsS = []int{60, 300, 3600, 86400}
@@ -273,12 +275,12 @@ func (s *Store) applyTrade(ctx context.Context, tx pgx.Tx, m enabledMarket, t *v
 
 	var fillID int64
 	err = tx.QueryRow(ctx, `
-		insert into fills (account_id, market, side, px, qty, block_number, tx_hash, log_index, maker_address, taker_address)
-		values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		insert into fills (account_id, market, side, px, qty, block_number, tx_hash, log_index, maker_address, taker_address, block_time)
+		values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		on conflict (tx_hash, log_index) do nothing
 		returning fill_id`,
 		accountID, m.symbol, side, px.FloatString(18), qty.FloatString(18),
-		int64(t.BlockNumber), txHash, int32(t.LogIndex), t.Maker.Bytes(), t.Taker.Bytes()).Scan(&fillID)
+		int64(t.BlockNumber), txHash, int32(t.LogIndex), t.Maker.Bytes(), t.Taker.Bytes(), blockTime).Scan(&fillID)
 	if err == pgx.ErrNoRows {
 		// Already recorded by an earlier run over this same window -- a
 		// reprocess after a crash, not new information. Writing the ledger

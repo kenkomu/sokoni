@@ -9,6 +9,22 @@ String shortAddress(String address) {
   return '${address.substring(0, 6)}…${address.substring(address.length - 4)}';
 }
 
+/// A token's page on Monad's own block explorer (docs.monad.xyz/tooling-
+/// and-infra/block-explorers: Monadscan, Etherscan-compatible, hence the
+/// `/token/` path Etherscan itself uses). Independent verification is the
+/// whole point of showing a contract address next to a Buy/Sell button in
+/// the first place — a copy button alone only lets someone paste the
+/// address somewhere else to check it, not check it from here.
+String explorerTokenUrl(int chainId, String address) {
+  final host = chainId == 143 ? 'monadscan.com' : 'testnet.monadscan.com';
+  return 'https://$host/token/$address';
+}
+
+String explorerTransactionUrl(int chainId, String txHash) {
+  final host = chainId == 143 ? 'monadscan.com' : 'testnet.monadscan.com';
+  return 'https://$host/tx/$txHash';
+}
+
 /// Puts the **full** address on the clipboard, whatever shortened form the
 /// person was looking at when they tapped — the reason to copy one is to
 /// paste it somewhere that needs all 42 characters, so copying the elided

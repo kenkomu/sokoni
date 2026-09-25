@@ -1,15 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:reown_core/reown_core.dart';
 import 'package:reown_sign/reown_sign.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/config.dart';
+import '../../core/session_store.dart';
 import '../../data/api/sokoni_api.dart';
+import '../../data/wallet_connect/wallet_connect_service.dart';
 import '../../data/wallet_connect/wallet_connect_signer.dart';
 import '../../design/app_shell.dart';
 import 'mera_controller.dart';
-import 'welcome_screen.dart';
+import 'sign_out.dart';
 
 /// Sign in with a real external wallet (MetaMask, Trust Wallet, Rainbow,
 /// ...) instead of the on-device Mera key — structurally [showMeraSheet]'s
@@ -85,31 +86,26 @@ class _WalletConnectSheetState extends State<_WalletConnectSheet>
 
   Future<void> _init() async {
     try {
-      final client = await ReownSignClient.createInstance(
-        projectId: widget.config.walletConnectProjectId,
-        metadata: const PairingMetadata(
-          name: 'Sokoni',
-          description:
-              'Trade on Monad with your fingerprint. Balances in AUSD.',
-          // Shown to the wallet as this dapp's identity — not a domain we
-          // own, so it stays pointed at the one that actually is.
-          url: 'https://sokoni.bitshada.com',
-          icons: [],
-          // Where a wallet sends the person back to once they've approved.
-          // This rides along in the session proposal, so it covers the whole
-          // session — the first connection and every later signature — not
-          // just this pairing. The scheme is registered in
-          // android/app/src/main/AndroidManifest.xml and ios/Runner/Info.plist;
-          // honouring it is the wallet's choice, so the flow still has to
-          // work when nothing comes back (see wallet_connect_signer.dart).
-          redirect: Redirect(native: 'sokoni://'),
-        ),
-      );
+      final client = await WalletConnectService.createClient(widget.config);
       if (!mounted) return;
       setState(() {
         _client = client;
         _initializing = false;
       });
+
+      // A still-valid session from a previous sign-in skips pairing (and
+      // the wallet-approval tap) entirely — see WalletConnectService
+      // .findExisting's doc for why this is the actual fix for "connecting
+      // takes long", not just a nicer spinner.
+      final existing = WalletConnectService.findExisting(client, widget.config);
+      if (existing != null) {
+        _navigated = true;
+        await _controller.useWallet(
+          WalletConnectSigner(client, existing, chainId: _chainId),
+        );
+        return;
+      }
+
       // Straight into pairing rather than parking on a "Connect wallet"
       // button: opening this sheet *was* that decision, and a second tap
       // confirming the first only delays the wallet prompt. The button
@@ -141,15 +137,7 @@ class _WalletConnectSheetState extends State<_WalletConnectSheet>
     });
     try {
       final response = await client.connect(
-        optionalNamespaces: {
-          'eip155': RequiredNamespace(
-            chains: [_chainId],
-            // personal_sign is all WalletConnectSigner needs — see
-            // wallet_connect_signer.dart.
-            methods: const ['personal_sign'],
-            events: const ['chainChanged', 'accountsChanged'],
-          ),
-        },
+        optionalNamespaces: WalletConnectService.namespaces(widget.config),
       );
       final uri = response.uri;
       if (uri != null) {
@@ -179,6 +167,12 @@ class _WalletConnectSheetState extends State<_WalletConnectSheet>
   }
 
   void _enterApp(MeraAccountInfo meraAccount) {
+    // Recorded here, not only on a fresh pairing: this also runs on the
+    // findExisting-restored path in _init, so a session reused today stays
+    // the thing app startup tries to restore tomorrow too.
+    SessionStore().save(SignedInKind.walletConnect);
+
+    final signer = _controller.state.signer;
     final navigator = Navigator.of(context);
     navigator.pop();
     navigator.pushReplacement(
@@ -193,13 +187,20 @@ class _WalletConnectSheetState extends State<_WalletConnectSheet>
                 address: meraAccount.address,
                 deployed: meraAccount.deployed,
               ),
-              signer: _controller.state.signer,
+              signer: signer,
               onLogout:
-                  () => navigator.pushAndRemoveUntil(
-                    MaterialPageRoute(
-                      builder: (_) => WelcomeScreen(config: widget.config),
-                    ),
-                    (route) => false,
+                  () => signOut(
+                    navigator,
+                    signer,
+                    widget.config,
+                    autoOpenConnect: false,
+                  ),
+              onSwitchWallet:
+                  () => signOut(
+                    navigator,
+                    signer,
+                    widget.config,
+                    autoOpenConnect: true,
                   ),
             ),
       ),

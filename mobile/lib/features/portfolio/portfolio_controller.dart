@@ -6,30 +6,45 @@ import '../onboarding/passkey_controller.dart' show describeFailure;
 
 @immutable
 class PortfolioState {
-  const PortfolioState({this.balances, this.loading = false, this.error});
+  const PortfolioState({
+    this.balances,
+    this.activity,
+    this.loading = false,
+    this.activityLoading = false,
+    this.error,
+    this.activityError,
+  });
 
   /// Null until a real balances fetch completes — distinct from an empty
   /// list, which means "fetched, holds nothing of any sponsored token".
   final List<AccountBalance>? balances;
+  final List<AccountActivity>? activity;
   final bool loading;
+  final bool activityLoading;
   final String? error;
+  final String? activityError;
 
   PortfolioState copyWith({
     List<AccountBalance>? balances,
+    List<AccountActivity>? activity,
     bool? loading,
+    bool? activityLoading,
     String? error,
+    String? activityError,
     bool clearError = false,
+    bool clearActivityError = false,
   }) => PortfolioState(
     balances: balances ?? this.balances,
+    activity: activity ?? this.activity,
     loading: loading ?? this.loading,
+    activityLoading: activityLoading ?? this.activityLoading,
     error: clearError ? null : (error ?? this.error),
+    activityError:
+        clearActivityError ? null : (activityError ?? this.activityError),
   );
 }
 
-/// Portfolio asks one question — what does this account hold — so it makes
-/// exactly one request. It used to also pull the whole market list, for a
-/// copy of the Markets tab that no longer sits on this screen (see
-/// _ExploreMarketsCard in portfolio_screen.dart).
+/// Portfolio loads this account's balances and its account-scoped activity.
 class PortfolioController extends ChangeNotifier {
   PortfolioController({
     required AppConfig config,
@@ -62,15 +77,40 @@ class PortfolioController extends ChangeNotifier {
   Future<void> load() async {
     final address = accountAddress;
     if (address == null) {
-      _set(const PortfolioState(balances: [], loading: false));
+      _set(const PortfolioState(balances: [], activity: [], loading: false));
       return;
     }
-    _set(_state.copyWith(loading: true, clearError: true));
+    _set(
+      _state.copyWith(
+        loading: true,
+        activityLoading: true,
+        clearError: true,
+        clearActivityError: true,
+      ),
+    );
+    await Future.wait([_loadBalances(address), _loadActivity(address)]);
+  }
+
+  Future<void> _loadBalances(String address) async {
     try {
       final balances = await _api.balances(address);
-      _set(PortfolioState(balances: balances.balances, loading: false));
+      _set(_state.copyWith(balances: balances.balances, loading: false));
     } catch (e) {
       _set(_state.copyWith(loading: false, error: describeFailure(e)));
+    }
+  }
+
+  Future<void> _loadActivity(String address) async {
+    try {
+      final activity = await _api.accountActivity(address, limit: 20);
+      _set(_state.copyWith(activity: activity, activityLoading: false));
+    } catch (e) {
+      _set(
+        _state.copyWith(
+          activityLoading: false,
+          activityError: describeFailure(e),
+        ),
+      );
     }
   }
 }

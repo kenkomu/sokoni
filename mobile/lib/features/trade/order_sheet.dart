@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/config.dart';
 import '../../data/api/sokoni_api.dart';
 import '../../data/signer.dart';
+import '../../design/format.dart';
 import '../onboarding/mera_controller.dart';
 
 /// Buy or sell [market] at the current market price — a market order only,
@@ -187,6 +188,21 @@ class _OrderSheetState extends State<_OrderSheet> {
                     border: const OutlineInputBorder(),
                   ),
                 ),
+                const SizedBox(height: 6),
+                // Min size/tick are in the base asset regardless of side —
+                // on a Buy the field above is quote-denominated, so this
+                // reads as market context ("what this book will accept"),
+                // not a literal bound on the number just typed. Only shown
+                // here, not as a headline market-info stat: this is the one
+                // moment it's actually decision-relevant.
+                Text(
+                  'Orders fill in ${widget.market.baseSymbol} — min size '
+                  '${formatPrice(widget.market.minQty)} · tick '
+                  '${formatPrice(widget.market.tickSize)}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
                 const SizedBox(height: 16),
                 SizedBox(
                   width: double.infinity,
@@ -207,6 +223,16 @@ class _OrderSheetState extends State<_OrderSheet> {
                             : Text(_isBuy ? 'Buy' : 'Sell'),
                   ),
                 ),
+                if (state.isBusy) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    _busyLabel(state),
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
                 if (state.error != null) ...[
                   const SizedBox(height: 16),
                   _ErrorNotice(message: state.error!),
@@ -219,6 +245,17 @@ class _OrderSheetState extends State<_OrderSheet> {
     );
   }
 }
+
+/// Distinguishes the two very different waits a submit can be stuck in —
+/// without this, a fast wallet approval followed by normal chain
+/// confirmation time reads as one long undifferentiated hang, since both
+/// look identical as a bare spinner. [MeraState.op] already carries the
+/// distinction (prepared/submitted/landed); this just says it out loud.
+String _busyLabel(MeraState state) => switch (state.op?.status) {
+  null || 'prepared' => 'Waiting for your signature...',
+  'submitted' => 'Submitted — confirming on-chain...',
+  _ => 'Working...',
+};
 
 class _SuccessNotice extends StatelessWidget {
   const _SuccessNotice({required this.status});

@@ -16,13 +16,23 @@ class AppShell extends StatefulWidget {
     required this.config,
     required this.account,
     required this.onLogout,
+    this.onSwitchWallet,
     this.signer,
     super.key,
   });
 
   final AppConfig config;
   final AccountInfo account;
-  final VoidCallback onLogout;
+
+  /// Async because it may need to end a real WalletConnect session on the
+  /// relay before it's safe to navigate away — see sign_out.dart.
+  final Future<void> Function() onLogout;
+
+  /// Same as [onLogout] but reopens the connect sheet immediately instead of
+  /// stopping at the welcome screen — one tap to sign into a different
+  /// wallet instead of two. Null wherever there's nothing meaningful to
+  /// switch to (the passkey and debug-preview paths).
+  final Future<void> Function()? onSwitchWallet;
 
   /// The signer that got this account into the app — an on-device key or a
   /// connected wallet — threaded down to every screen with a Buy/Sell button
@@ -64,6 +74,7 @@ class _AppShellState extends State<AppShell> {
             config: widget.config,
             account: widget.account,
             onLogout: widget.onLogout,
+            onSwitchWallet: widget.onSwitchWallet,
           ),
         ],
       ),

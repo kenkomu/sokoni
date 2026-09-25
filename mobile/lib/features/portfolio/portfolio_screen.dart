@@ -7,6 +7,7 @@ import '../../design/format.dart';
 import '../../design/skeleton.dart';
 import '../../design/token_avatar.dart';
 import 'portfolio_controller.dart';
+import 'recent_activity.dart';
 
 /// Balances are real now — read live via `GET /v1/accounts/{address}/balances`
 /// (`internal/gateway/service.go`'s `Balances`, since there is still no
@@ -79,6 +80,13 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
               ),
               const SizedBox(height: 12),
               ..._balancesBody(state),
+              const SizedBox(height: 20),
+              RecentActivity(
+                config: widget.config,
+                items: state.activity,
+                loading: state.activityLoading,
+                error: state.activityError,
+              ),
               const SizedBox(height: 20),
               _ExploreMarketsCard(onViewMarkets: widget.onViewMarkets),
             ],

@@ -1,3 +1,4 @@
+import 'package:decimal/decimal.dart';
 import 'package:flutter/foundation.dart';
 
 import '../../core/config.dart';
@@ -7,12 +8,45 @@ import '../onboarding/passkey_controller.dart' show describeFailure;
 
 enum StreamStatus { connecting, live, gap, disconnected }
 
+/// High/low/volume across the last 24 1-hour candles — independent of
+/// whatever time range the chart itself is showing (see [TradeState.candles]
+/// vs this), so switching to the 1H or 1W tab never changes the headline
+/// stat next to the price. Null fields mean "not enough candles yet", never
+/// a fabricated zero.
+@immutable
+class Market24hStats {
+  const Market24hStats({this.high, this.low, this.volume});
+
+  final String? high;
+  final String? low;
+  final String? volume;
+
+  factory Market24hStats.fromCandles(List<Candle> candles) {
+    if (candles.isEmpty) return const Market24hStats();
+    Decimal? high, low, volume;
+    for (final c in candles) {
+      final h = Decimal.tryParse(c.high);
+      final l = Decimal.tryParse(c.low);
+      final v = Decimal.tryParse(c.volume);
+      if (h != null) high = high == null || h > high ? h : high;
+      if (l != null) low = low == null || l < low ? l : low;
+      if (v != null) volume = (volume ?? Decimal.zero) + v;
+    }
+    return Market24hStats(
+      high: high?.toString(),
+      low: low?.toString(),
+      volume: volume?.toString(),
+    );
+  }
+}
+
 @immutable
 class TradeState {
   const TradeState({
     required this.symbol,
     this.candles,
     this.trades,
+    this.stats24h,
     this.candleLimit = 60,
     this.candleInterval = 60,
     this.streamStatus = StreamStatus.connecting,
@@ -24,12 +58,17 @@ class TradeState {
   final List<Candle>? candles;
   final List<MarketTrade>? trades;
 
+  /// Null until [TradeController.load24hStats] returns — see its doc for
+  /// why this is a separate fetch from [candles].
+  final Market24hStats? stats24h;
+
   /// How many buckets of [candleInterval] the REST snapshot asked for.
   final int candleLimit;
 
   /// Which bucket size, in seconds, is currently shown — one of
   /// gateway.candleIntervalsS (60/300/3600/86400), matching the trade
-  /// screen's 1H/6H/24H/All tabs.
+  /// screen's 1H/6H/24H/1W/30D tabs. Not unique on its own: 24H and 1W both
+  /// use 3600 and are told apart by [candleLimit] (24 vs 168).
   final int candleInterval;
   final StreamStatus streamStatus;
   final bool loading;
@@ -38,6 +77,7 @@ class TradeState {
   TradeState copyWith({
     List<Candle>? candles,
     List<MarketTrade>? trades,
+    Market24hStats? stats24h,
     int? candleLimit,
     int? candleInterval,
     StreamStatus? streamStatus,
@@ -48,6 +88,7 @@ class TradeState {
     symbol: symbol,
     candles: candles ?? this.candles,
     trades: trades ?? this.trades,
+    stats24h: stats24h ?? this.stats24h,
     candleLimit: candleLimit ?? this.candleLimit,
     candleInterval: candleInterval ?? this.candleInterval,
     streamStatus: streamStatus ?? this.streamStatus,
@@ -126,6 +167,24 @@ class TradeController extends ChangeNotifier {
       _set(_state.copyWith(candles: candles, trades: trades, loading: false));
     } catch (e) {
       _set(_state.copyWith(loading: false, error: describeFailure(e)));
+    }
+  }
+
+  /// Fetches the fixed 24×1h window [Market24hStats] is computed from,
+  /// independent of [loadInitial]'s own candles (whatever time range the
+  /// chart is currently showing). Silently a no-op on failure — a missing
+  /// headline stat is not worth surfacing the same way a failed chart load
+  /// is, and the price header already falls back to "—" per field.
+  Future<void> load24hStats() async {
+    try {
+      final candles = await _api.candles(
+        symbol: _state.symbol,
+        interval: 3600,
+        limit: 24,
+      );
+      _set(_state.copyWith(stats24h: Market24hStats.fromCandles(candles)));
+    } catch (_) {
+      // See doc above.
     }
   }
 

@@ -246,8 +246,12 @@ refuse roughly one key in 256.
   from the indexer. `Deps.Markets` is nil in the no-`DATABASE_URL` laptop
   mode, same as `Accounts`; the endpoints answer 502 rather than the
   gateway refusing to start.
-- On mobile, `features/onboarding`, `markets` and `trade` now exist;
-  `portfolio`, `settings` and the `domain/` layer are still placeholders.
+- On mobile, `features/onboarding`, `markets`, `trade` and `portfolio` now
+  exist. Portfolio shows balances and a `Recent activity` list; account
+  operations are stored in Postgres by smart account, and the list refreshes
+  submitted-operation status from the bundler. Market fills already indexed
+  before the activity feature are included when they have a block timestamp.
+  `settings` and the `domain/` layer remain placeholders.
   `MarketsScreen` shows static market metadata only (no live prices in the
   list); `TradeScreen` does the live work — a REST snapshot, then a
   `MarketStream` subscription, with a detected sequence gap recovered by

@@ -249,6 +249,7 @@ func run(log *slog.Logger) error {
 		MeraAccounts: meraAccounts,
 		Ops:          ops,
 		Markets:      markets,
+		Activity:     db,
 		Log:          log,
 	})
 

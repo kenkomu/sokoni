@@ -37,9 +37,21 @@ class SokoniApi {
   /// there is no ledger for this yet (see CLAUDE.md's Known gaps), so this
   /// is exactly as current as the chain itself, never a cached number.
   Future<AccountBalances> balances(String address) async =>
-      AccountBalances.fromJson(
-        await _get('/v1/accounts/$address/balances'),
-      );
+      AccountBalances.fromJson(await _get('/v1/accounts/$address/balances'));
+
+  Future<List<AccountActivity>> accountActivity(
+    String address, {
+    int limit = 50,
+  }) async {
+    final j = await _get(
+      '/v1/accounts/${Uri.encodeComponent(address)}/activity',
+      query: {'limit': limit},
+    );
+    return [
+      for (final item in (j['activity'] as List? ?? const []))
+        AccountActivity.fromJson(item as Map<String, dynamic>),
+    ];
+  }
 
   /// Learn the account this passkey owns. The address is counterfactual:
   /// known, and able to receive funds, before anything has been deployed.
@@ -554,16 +566,24 @@ class MarketTrade {
     required this.qty,
     required this.blockNumber,
     required this.txHash,
+    this.blockTime,
   });
 
-  factory MarketTrade.fromJson(Map<String, dynamic> j) => MarketTrade(
-    fillId: _int(j, 'fillId'),
-    side: _str(j, 'side'),
-    px: _str(j, 'px'),
-    qty: _str(j, 'qty'),
-    blockNumber: _int(j, 'blockNumber'),
-    txHash: _str(j, 'txHash'),
-  );
+  factory MarketTrade.fromJson(Map<String, dynamic> j) {
+    final blockTime = j['blockTime'] as String?;
+    return MarketTrade(
+      fillId: _int(j, 'fillId'),
+      side: _str(j, 'side'),
+      px: _str(j, 'px'),
+      qty: _str(j, 'qty'),
+      blockNumber: _int(j, 'blockNumber'),
+      txHash: _str(j, 'txHash'),
+      blockTime:
+          (blockTime == null || blockTime.isEmpty)
+              ? null
+              : DateTime.parse(blockTime),
+    );
+  }
 
   final int fillId;
 
@@ -575,6 +595,55 @@ class MarketTrade {
   final String qty;
   final int blockNumber;
   final String txHash;
+
+  /// Null for fills recorded before the gateway started returning
+  /// `blockTime` (backend/migrations/0009) — shown as "—", never guessed.
+  final DateTime? blockTime;
+}
+
+class AccountActivity {
+  const AccountActivity({
+    required this.opId,
+    required this.kind,
+    required this.asset,
+    required this.amount,
+    required this.decimals,
+    required this.status,
+    required this.userOpHash,
+    required this.createdAt,
+    this.market = '',
+    this.side = '',
+    this.txHash,
+    this.reason,
+  });
+
+  factory AccountActivity.fromJson(Map<String, dynamic> j) => AccountActivity(
+    opId: _str(j, 'opId'),
+    kind: _str(j, 'kind'),
+    market: j['market'] as String? ?? '',
+    side: j['side'] as String? ?? '',
+    asset: j['asset'] as String? ?? '',
+    amount: _str(j, 'amount'),
+    decimals: _int(j, 'decimals'),
+    status: _str(j, 'status'),
+    userOpHash: j['userOpHash'] as String? ?? '',
+    txHash: j['txHash'] as String?,
+    reason: j['reason'] as String?,
+    createdAt: DateTime.parse(_str(j, 'createdAt')),
+  );
+
+  final String opId;
+  final String kind;
+  final String market;
+  final String side;
+  final String asset;
+  final String amount;
+  final int decimals;
+  final String status;
+  final String userOpHash;
+  final String? txHash;
+  final String? reason;
+  final DateTime createdAt;
 }
 
 String _hexEncode(Uint8List b) =>

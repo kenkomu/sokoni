@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'core/config.dart';
 import 'core/theme_mode.dart';
 import 'design/theme.dart';
-import 'features/onboarding/welcome_screen.dart';
+import 'features/onboarding/startup_gate.dart';
 
 void main() {
   runApp(SokoniApp(config: AppConfig.fromEnvironment()));
@@ -25,7 +25,7 @@ class SokoniApp extends StatelessWidget {
             theme: SokoniTheme.light(),
             darkTheme: SokoniTheme.dark(),
             themeMode: mode,
-            home: WelcomeScreen(config: config),
+            home: StartupGate(config: config),
           ),
     );
   }

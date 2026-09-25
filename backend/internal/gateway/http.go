@@ -30,6 +30,7 @@ const maxBody = 64 << 10
 //	POST /v1/mera/ops                      prepare an operation for a Mera-owned account
 //	POST /v1/mera/ops/{id}/submit          return the signed ECDSA signature
 //	GET  /v1/accounts/{address}/balances   every sponsored token's balanceOf, read live
+//	GET  /v1/accounts/{address}/activity   recent account operations and status
 //	GET  /v1/markets                       enabled markets
 //	GET  /v1/markets/{symbol}/candles      candle history (interval query param, seconds)
 //	GET  /v1/markets/{symbol}/trades       recent market-wide trades (limit query param)
@@ -57,6 +58,7 @@ func NewHandler(svc *Service, hub *Hub, log *slog.Logger) http.Handler {
 	mux.HandleFunc("POST /v1/mera/ops", h.prepareMera)
 	mux.HandleFunc("POST /v1/mera/ops/{id}/submit", h.submitMera)
 	mux.HandleFunc("GET /v1/accounts/{address}/balances", h.balances)
+	mux.HandleFunc("GET /v1/accounts/{address}/activity", h.activity)
 	mux.HandleFunc("GET /v1/markets", h.markets)
 	mux.HandleFunc("GET /v1/markets/{symbol}/candles", h.candles)
 	mux.HandleFunc("GET /v1/markets/{symbol}/trades", h.trades)
@@ -250,6 +252,21 @@ func (h *handler) balances(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view, err := h.svc.Balances(r.Context(), common.HexToAddress(addr))
+	h.respond(w, http.StatusOK, view, err)
+}
+
+func (h *handler) activity(w http.ResponseWriter, r *http.Request) {
+	addr := r.PathValue("address")
+	if !common.IsHexAddress(addr) {
+		h.fail(w, fail(KindInvalid, "bad_address", "address must be a 0x address", nil))
+		return
+	}
+	limit, err := parseLimit(r)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	view, err := h.svc.AccountActivity(r.Context(), common.HexToAddress(addr), limit)
 	h.respond(w, http.StatusOK, view, err)
 }
 

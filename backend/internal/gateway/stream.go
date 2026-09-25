@@ -231,6 +231,7 @@ func (h *Hub) fetch(ctx context.Context, kind, symbol string, interval int) (dat
 		return TradeView{
 			FillID: t.FillID, Side: t.Side, Px: t.Px, Qty: t.Qty,
 			BlockNumber: t.BlockNumber, TxHash: "0x" + hex.EncodeToString(t.TxHash),
+			BlockTime: tradeBlockTime(t.BlockTime),
 		}, strconv.FormatInt(t.FillID, 10), true
 	default:
 		return nil, "", false

@@ -68,6 +68,12 @@ type MarketData interface {
 	RecentTrades(ctx context.Context, symbol string, limit int) ([]store.Trade, error)
 }
 
+type ActivityData interface {
+	UpsertActivity(context.Context, store.Activity) error
+	UpdateActivity(context.Context, string, string, []byte, *int64, string, time.Time) error
+	ListActivity(context.Context, []byte, int) ([]store.Activity, error)
+}
+
 // Token is an ERC-20 the paymaster will sponsor transfers of.
 type Token struct {
 	Address  common.Address
@@ -156,6 +162,7 @@ type Deps struct {
 	MeraAccounts MeraAccounts
 	Ops          PendingOps
 	Markets      MarketData
+	Activity     ActivityData
 	Log          *slog.Logger
 	Now          func() time.Time
 }
@@ -312,6 +319,7 @@ const (
 	StatusLanded    = "landed"
 	StatusReverted  = "reverted"
 	StatusExpired   = "expired"
+	StatusFailed    = "failed"
 )
 
 type StatusView struct {
@@ -321,6 +329,26 @@ type StatusView struct {
 	TxHash      string `json:"txHash,omitempty"`
 	BlockNumber uint64 `json:"blockNumber,omitempty"`
 	Reason      string `json:"reason,omitempty"`
+}
+
+type ActivityView struct {
+	OpID        string    `json:"opId"`
+	Kind        string    `json:"kind"`
+	Market      string    `json:"market,omitempty"`
+	Side        string    `json:"side,omitempty"`
+	Asset       string    `json:"asset,omitempty"`
+	Amount      string    `json:"amount"`
+	Decimals    int32     `json:"decimals"`
+	Status      string    `json:"status"`
+	UserOpHash  string    `json:"userOpHash,omitempty"`
+	TxHash      string    `json:"txHash,omitempty"`
+	BlockNumber *int64    `json:"blockNumber,omitempty"`
+	Reason      string    `json:"reason,omitempty"`
+	CreatedAt   time.Time `json:"createdAt"`
+}
+
+type ActivityListView struct {
+	Activity []ActivityView `json:"activity"`
 }
 
 // candleIntervalS is the default when a request omits ?interval, and
@@ -366,10 +394,22 @@ type TradeView struct {
 	Qty         string `json:"qty"`
 	BlockNumber int64  `json:"blockNumber"`
 	TxHash      string `json:"txHash"`
+
+	// Empty for fills recorded before migrations/0009 -- see store.Trade's
+	// BlockTime doc. Omitted rather than a zero-value timestamp so the
+	// client can tell "unknown" from "midnight UTC".
+	BlockTime string `json:"blockTime,omitempty"`
 }
 
 type TradesView struct {
 	Trades []TradeView `json:"trades"`
+}
+
+func tradeBlockTime(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339Nano)
 }
 
 // ------------------------------------------------------------------ config
@@ -543,6 +583,9 @@ func (s *Service) Prepare(ctx context.Context, credentialID string, in Intent) (
 		ID: id, CredentialID: credentialID, Op: op, UserOpHash: hash, ExpiresAt: expires,
 	}); err != nil {
 		return nil, fail(KindUpstream, "store", "could not save the operation", err)
+	}
+	if err := s.saveActivity(ctx, id, cred.Address, in, hash, now); err != nil {
+		s.d.Log.Warn("could not save account activity", "op", id, "err", err)
 	}
 
 	return &PreparedView{
@@ -800,6 +843,7 @@ func (s *Service) Submit(ctx context.Context, opID string, credentialID string, 
 
 	sent, err := s.d.Bundler.SendUserOperation(ctx, &op)
 	if err != nil {
+		s.updateActivity(ctx, opID, StatusFailed, nil, nil, err.Error())
 		return nil, fail(KindUpstream, "bundler", "the bundler did not accept the operation", err)
 	}
 	if sent != p.UserOpHash {
@@ -813,6 +857,7 @@ func (s *Service) Submit(ctx context.Context, opID string, credentialID string, 
 	if err := s.d.Ops.MarkSubmitted(ctx, opID, sent, s.d.Now()); err != nil {
 		return nil, fail(KindUpstream, "store", "sent, but could not record it", err)
 	}
+	s.updateActivity(ctx, opID, StatusSubmitted, nil, nil, "")
 	return &SubmittedView{OpID: opID, UserOpHash: sent.Hex(), Status: StatusSubmitted}, nil
 }
 
@@ -959,6 +1004,9 @@ func (s *Service) PrepareMera(ctx context.Context, owner common.Address, in Inte
 	}); err != nil {
 		return nil, fail(KindUpstream, "store", "could not save the operation", err)
 	}
+	if err := s.saveActivity(ctx, id, cred.Address, in, hash, now); err != nil {
+		s.d.Log.Warn("could not save account activity", "op", id, "err", err)
+	}
 
 	return &PreparedView{
 		OpID:           id,
@@ -1016,6 +1064,7 @@ func (s *Service) SubmitMera(ctx context.Context, opID string, owner common.Addr
 
 	sent, err := s.d.Bundler.SendUserOperation(ctx, &op)
 	if err != nil {
+		s.updateActivity(ctx, opID, StatusFailed, nil, nil, err.Error())
 		return nil, fail(KindUpstream, "bundler", "the bundler did not accept the operation", err)
 	}
 	if sent != p.UserOpHash {
@@ -1026,6 +1075,7 @@ func (s *Service) SubmitMera(ctx context.Context, opID string, owner common.Addr
 	if err := s.d.Ops.MarkSubmitted(ctx, opID, sent, s.d.Now()); err != nil {
 		return nil, fail(KindUpstream, "store", "sent, but could not record it", err)
 	}
+	s.updateActivity(ctx, opID, StatusSubmitted, nil, nil, "")
 	return &SubmittedView{OpID: opID, UserOpHash: sent.Hex(), Status: StatusSubmitted}, nil
 }
 
@@ -1071,6 +1121,7 @@ func (s *Service) Status(ctx context.Context, opID string) (*StatusView, error) 
 		status := StatusPrepared
 		if s.d.Now().After(p.ExpiresAt) {
 			status = StatusExpired
+			s.updateActivity(ctx, opID, status, nil, nil, "")
 		}
 		return &StatusView{OpID: opID, Status: status}, nil
 	}
@@ -1091,7 +1142,116 @@ func (s *Service) Status(ctx context.Context, opID string) (*StatusView, error) 
 		view.Status = StatusReverted
 		view.Reason = receipt.Reason
 	}
+	block := int64(receipt.BlockNumber)
+	s.updateActivity(ctx, opID, view.Status, receipt.TxHash.Bytes(), &block, view.Reason)
 	return view, nil
+}
+
+func (s *Service) saveActivity(ctx context.Context, opID string, sender common.Address, in Intent, hash common.Hash, at time.Time) error {
+	if s.d.Activity == nil {
+		return nil
+	}
+	amount, ok := new(big.Int).SetString(in.Amount, 10)
+	if !ok {
+		return fmt.Errorf("invalid activity amount")
+	}
+	a := store.Activity{
+		OpID: opID, Account: sender.Bytes(), Kind: in.Kind, Market: in.Market,
+		Side: in.Side, Amount: amount.String(), Status: StatusPrepared,
+		UserOpHash: hash.Bytes(), CreatedAt: at, UpdatedAt: at,
+	}
+	if in.Kind == "trade" {
+		m, found, err := s.d.Markets.MarketBySymbol(ctx, in.Market)
+		if err != nil {
+			return fmt.Errorf("load market for activity: %w", err)
+		}
+		if !found {
+			return fmt.Errorf("market %q disappeared while recording activity", in.Market)
+		}
+		pair := strings.SplitN(in.Market, "-", 2)
+		if len(pair) != 2 {
+			return fmt.Errorf("market %q has no quote symbol", in.Market)
+		}
+		if in.Side == "sell" {
+			a.Asset = pair[0]
+			a.Decimals = m.BaseDec
+		} else {
+			a.Asset = pair[1]
+			a.Decimals = m.QuoteDec
+		}
+	} else {
+		t, ok := s.tokens[common.HexToAddress(in.Token)]
+		if !ok {
+			return fmt.Errorf("activity token is not configured")
+		}
+		a.Asset, a.Decimals = t.Symbol, t.Decimals
+	}
+	return s.d.Activity.UpsertActivity(ctx, a)
+}
+
+func (s *Service) updateActivity(ctx context.Context, opID, status string, txHash []byte, block *int64, reason string) {
+	if s.d.Activity == nil {
+		return
+	}
+	if err := s.d.Activity.UpdateActivity(ctx, opID, status, txHash, block, reason, s.d.Now()); err != nil {
+		s.d.Log.Warn("could not update account activity", "op", opID, "status", status, "err", err)
+	}
+}
+
+func (s *Service) AccountActivity(ctx context.Context, address common.Address, limit int) (*ActivityListView, error) {
+	if s.d.Activity == nil {
+		return nil, fail(KindUpstream, "activity_unavailable", "account activity is unavailable", nil)
+	}
+	rows, err := s.d.Activity.ListActivity(ctx, address.Bytes(), limit)
+	if err != nil {
+		return nil, fail(KindUpstream, "activity_store", "could not load account activity", err)
+	}
+	out := &ActivityListView{Activity: make([]ActivityView, 0, len(rows))}
+	for _, a := range rows {
+		view := ActivityView{
+			OpID: a.OpID, Kind: a.Kind, Market: a.Market, Side: a.Side, Asset: a.Asset,
+			Amount: a.Amount, Decimals: a.Decimals, Status: a.Status,
+			Reason:    a.Reason,
+			CreatedAt: a.CreatedAt,
+		}
+		if len(a.UserOpHash) > 0 {
+			view.UserOpHash = "0x" + common.Bytes2Hex(a.UserOpHash)
+		}
+		if len(a.TxHash) > 0 {
+			view.TxHash = "0x" + common.Bytes2Hex(a.TxHash)
+		}
+		view.BlockNumber = a.BlockNumber
+		// Refresh pending operations from the bundler so the portfolio can
+		// move them from confirming to landed/reverted without a live trade
+		// screen still polling the operation id.
+		if a.Status == StatusSubmitted {
+			receipt, receiptErr := s.d.Bundler.GetUserOperationReceipt(ctx, common.BytesToHash(a.UserOpHash))
+			if receiptErr == nil && receipt != nil {
+				view.TxHash = receipt.TxHash.Hex()
+				block := int64(receipt.BlockNumber)
+				view.BlockNumber = &block
+				if receipt.Success {
+					view.Status = StatusLanded
+				} else {
+					view.Status, view.Reason = StatusReverted, receipt.Reason
+				}
+				s.updateActivity(ctx, a.OpID, view.Status, receipt.TxHash.Bytes(), &block, view.Reason)
+			}
+		} else if a.Status == StatusPrepared {
+			pending, found, pendingErr := s.d.Ops.Get(ctx, a.OpID)
+			if pendingErr == nil {
+				if found && pending.Submitted() {
+					view.Status = StatusSubmitted
+					s.updateActivity(ctx, a.OpID, StatusSubmitted, nil, nil, "")
+				} else if !found || s.d.Now().After(pending.ExpiresAt) {
+					view.Status = StatusExpired
+					s.updateActivity(ctx, a.OpID, StatusExpired, nil, nil, "")
+				}
+			}
+		}
+		out.Activity = append(out.Activity, view)
+	}
+	return out, nil
 }
 
 // ------------------------------------------------------------------ chain reads
@@ -1248,6 +1408,7 @@ func (s *Service) RecentTrades(ctx context.Context, symbol string, limit int) (*
 		out.Trades = append(out.Trades, TradeView{
 			FillID: t.FillID, Side: t.Side, Px: t.Px, Qty: t.Qty,
 			BlockNumber: t.BlockNumber, TxHash: "0x" + hex.EncodeToString(t.TxHash),
+			BlockTime: tradeBlockTime(t.BlockTime),
 		})
 	}
 	return out, nil

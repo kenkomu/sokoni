@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 
 import '../../core/config.dart';
+import '../../core/session_store.dart';
 import '../../data/api/sokoni_api.dart';
 import '../../design/app_shell.dart';
 import '../../design/theme.dart';
 import 'mera_controller.dart';
-import 'welcome_screen.dart';
+import 'sign_out.dart';
 
 /// Create (or resume) an account with a key held on this device — no
 /// biometric prompt, no WebAuthn relying-party domain, no seed phrase.
@@ -58,6 +59,11 @@ class _MeraSheetState extends State<_MeraSheet> {
 
   void _enterApp(MeraAccountInfo meraAccount) {
     if (!mounted) return;
+    // Recorded so a cold start knows to restore the on-device key rather
+    // than showing the welcome screen — see SessionStore's doc.
+    SessionStore().save(SignedInKind.localKey);
+
+    final signer = _controller.state.signer;
     final navigator = Navigator.of(context);
     navigator.pop();
     navigator.pushReplacement(
@@ -76,13 +82,20 @@ class _MeraSheetState extends State<_MeraSheet> {
                 address: meraAccount.address,
                 deployed: meraAccount.deployed,
               ),
-              signer: _controller.state.signer,
+              signer: signer,
               onLogout:
-                  () => navigator.pushAndRemoveUntil(
-                    MaterialPageRoute(
-                      builder: (_) => WelcomeScreen(config: widget.config),
-                    ),
-                    (route) => false,
+                  () => signOut(
+                    navigator,
+                    signer,
+                    widget.config,
+                    autoOpenConnect: false,
+                  ),
+              onSwitchWallet:
+                  () => signOut(
+                    navigator,
+                    signer,
+                    widget.config,
+                    autoOpenConnect: true,
                   ),
             ),
       ),

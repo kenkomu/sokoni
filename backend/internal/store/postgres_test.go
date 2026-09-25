@@ -202,7 +202,7 @@ func TestApplyBlocksDecodesAndInsertsAFill(t *testing.T) {
 
 // One trade must land in every interval in candleIntervalsS, not just the
 // 1-minute one every other test in this file checks -- this is what the
-// trade screen's 1H/6H/24H/All tabs actually read from (see mobile's
+// trade screen's 1H/6H/24H/1W/30D tabs actually read from (see mobile's
 // TradeController.loadInitial, which now passes a real interval alongside
 // limit).
 func TestApplyBlocksPopulatesEveryCandleInterval(t *testing.T) {

@@ -6,7 +6,7 @@ import '../../data/passkey/passkey_service.dart';
 import '../../design/app_shell.dart';
 import '../../design/theme.dart';
 import 'passkey_controller.dart';
-import 'welcome_screen.dart';
+import 'sign_out.dart';
 
 /// Create an account with a fingerprint — no seed phrase appears anywhere,
 /// because there isn't one, and the account never holds MON, because the
@@ -86,12 +86,24 @@ class _PasskeySheetState extends State<_PasskeySheet> {
             (_) => AppShell(
               config: widget.config,
               account: account,
+              // No SessionStore marker saved here: there is no restore path
+              // for a passkey account yet (see AppShell.signer's doc — this
+              // path has no Signer at all), so there is nothing a cold
+              // start could actually restore. onLogout/onSwitchWallet still
+              // clear any *other* path's leftover marker defensively.
               onLogout:
-                  () => navigator.pushAndRemoveUntil(
-                    MaterialPageRoute(
-                      builder: (_) => WelcomeScreen(config: widget.config),
-                    ),
-                    (route) => false,
+                  () => signOut(
+                    navigator,
+                    null,
+                    widget.config,
+                    autoOpenConnect: false,
+                  ),
+              onSwitchWallet:
+                  () => signOut(
+                    navigator,
+                    null,
+                    widget.config,
+                    autoOpenConnect: true,
                   ),
             ),
       ),

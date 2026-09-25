@@ -5,6 +5,7 @@ import 'package:reown_sign/reown_sign.dart';
 import 'package:web3dart/crypto.dart';
 
 import '../signer.dart';
+import 'wallet_connect_service.dart';
 
 /// A [Signer] backed by a real external wallet (MetaMask, Trust Wallet,
 /// Rainbow, ...) connected through raw WalletConnect v2 (`reown_sign`) —
@@ -37,6 +38,11 @@ class WalletConnectSigner implements Signer {
     }
     return accounts.first.split(':').last;
   }
+
+  /// Ends this session on the relay — see [WalletConnectService.disconnect]
+  /// for why that matters versus just dropping this object.
+  Future<void> disconnect() =>
+      WalletConnectService.disconnect(_client, _session);
 
   @override
   Future<Uint8List> sign(Uint8List hash) async {

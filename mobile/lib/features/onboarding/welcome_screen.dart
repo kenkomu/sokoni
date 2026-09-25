@@ -31,13 +31,39 @@ const _previewAccount = AccountInfo(
 /// for. Swap the primary button to it once that's proven. The `passkeys`
 /// plugin this app pins (2.22.3) also exposes no PRF extension to back
 /// Mera's real vault scheme — see mera_key_service.dart.
-class WelcomeScreen extends StatelessWidget {
-  const WelcomeScreen({required this.config, super.key});
+class WelcomeScreen extends StatefulWidget {
+  const WelcomeScreen({
+    required this.config,
+    this.autoOpenConnect = false,
+    super.key,
+  });
 
   final AppConfig config;
 
+  /// True only when this screen is the landing spot right after
+  /// [signOut]'s "Switch wallet" path — opens [showWalletConnectSheet]
+  /// itself on the first frame, so switching wallets is one tap instead of
+  /// "log out, look at the welcome screen, tap connect again".
+  final bool autoOpenConnect;
+
+  @override
+  State<WelcomeScreen> createState() => _WelcomeScreenState();
+}
+
+class _WelcomeScreenState extends State<WelcomeScreen> {
+  @override
+  void initState() {
+    super.initState();
+    if (widget.autoOpenConnect) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => showWalletConnectSheet(context, widget.config),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final config = widget.config;
     // Pinned to the light theme regardless of system brightness: this is a
     // fixed marketing splash matching one specific Figma design, not a
     // themed app screen — following system dark mode here would silently
@@ -193,7 +219,7 @@ class _DebugPreviewCard extends StatelessWidget {
                         (_) => AppShell(
                           config: config,
                           account: _previewAccount,
-                          onLogout: () => Navigator.pop(context),
+                          onLogout: () async => Navigator.pop(context),
                         ),
                   ),
                 ),

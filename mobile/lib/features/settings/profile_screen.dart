@@ -13,12 +13,14 @@ class ProfileScreen extends StatelessWidget {
     required this.config,
     required this.account,
     required this.onLogout,
+    this.onSwitchWallet,
     super.key,
   });
 
   final AppConfig config;
   final AccountInfo account;
-  final VoidCallback onLogout;
+  final Future<void> Function() onLogout;
+  final Future<void> Function()? onSwitchWallet;
 
   @override
   Widget build(BuildContext context) {
@@ -91,6 +93,13 @@ class ProfileScreen extends StatelessWidget {
             const SizedBox(height: 8),
             const Divider(),
             const SizedBox(height: 8),
+            if (onSwitchWallet != null)
+              _MenuTile(
+                icon: Icons.swap_horiz,
+                label: 'Switch wallet',
+                subtitle: 'Disconnect and connect a different one',
+                onTap: onSwitchWallet,
+              ),
             _MenuTile(
               icon: Icons.logout,
               label: 'Log out',
