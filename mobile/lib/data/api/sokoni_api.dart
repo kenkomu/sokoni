@@ -615,6 +615,9 @@ class AccountActivity {
     this.side = '',
     this.txHash,
     this.reason,
+    this.quoteAsset,
+    this.quoteAmount,
+    this.quoteDecimals,
   });
 
   factory AccountActivity.fromJson(Map<String, dynamic> j) => AccountActivity(
@@ -630,6 +633,9 @@ class AccountActivity {
     txHash: j['txHash'] as String?,
     reason: j['reason'] as String?,
     createdAt: DateTime.parse(_str(j, 'createdAt')),
+    quoteAsset: j['quoteAsset'] as String?,
+    quoteAmount: j['quoteAmount'] as String?,
+    quoteDecimals: j['quoteDecimals'] as int?,
   );
 
   final String opId;
@@ -644,6 +650,14 @@ class AccountActivity {
   final String? txHash;
   final String? reason;
   final DateTime createdAt;
+
+  /// The trade's other leg — what was received on a sell, what was spent
+  /// on a buy. Null until a real fill exists for the operation (a
+  /// prepared/submitted market order has no output size yet — see the
+  /// gateway's own ActivityView.QuoteAsset doc).
+  final String? quoteAsset;
+  final String? quoteAmount;
+  final int? quoteDecimals;
 }
 
 String _hexEncode(Uint8List b) =>

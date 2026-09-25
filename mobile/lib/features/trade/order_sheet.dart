@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/config.dart';
+import '../../core/money.dart';
 import '../../data/api/sokoni_api.dart';
 import '../../data/signer.dart';
 import '../../design/format.dart';
@@ -57,8 +58,15 @@ class _OrderSheet extends StatefulWidget {
 
 class _OrderSheetState extends State<_OrderSheet> {
   late final MeraController _controller = MeraController(config: widget.config);
+  late final SokoniApi _api = SokoniApi(baseUrl: widget.config.apiBaseUrl);
   final _amountController = TextEditingController();
   bool _landed = false;
+
+  // Null until the balance fetch (which needs the smart account address,
+  // learned only once _controller.useWallet's registration resolves)
+  // completes. Distinct from "0" — see _balanceLabel.
+  String? _availableBalance;
+  bool _fetchedBalance = false;
 
   bool get _isBuy => widget.side == 'buy';
 
@@ -87,6 +95,39 @@ class _OrderSheetState extends State<_OrderSheet> {
     if (_controller.state.op?.landed == true && !_landed) {
       _landed = true;
     }
+    final address = _controller.state.account?.address;
+    if (address != null && !_fetchedBalance) {
+      _fetchedBalance = true;
+      _loadBalance(address);
+    }
+  }
+
+  /// Knowing what's actually available — not just the market's abstract
+  /// tick/min-size rules — is the other half of "can I place this order":
+  /// rules say what the book will accept, balance says what you actually
+  /// have to offer it. Best-effort: a failed fetch just leaves the balance
+  /// line blank rather than blocking the sheet over a read that isn't on
+  /// the critical path to placing the trade itself.
+  Future<void> _loadBalance(String address) async {
+    try {
+      final balances = await _api.balances(address);
+      for (final b in balances.balances) {
+        if (b.token.symbol == _spendSymbol) {
+          if (mounted) setState(() => _availableBalance = b.amount);
+          return;
+        }
+      }
+      if (mounted) setState(() => _availableBalance = '0');
+    } catch (_) {
+      // See doc above.
+    }
+  }
+
+  void _useMax() {
+    final available = _availableBalance;
+    if (available == null) return;
+    _amountController.text =
+        Money.fromBaseUnits(BigInt.parse(available), _spendDecimals).toString();
   }
 
   @override
@@ -177,6 +218,33 @@ class _OrderSheetState extends State<_OrderSheet> {
                   ),
                 ),
               ] else ...[
+                if (_availableBalance != null) ...[
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Available: '
+                        '${Money.fromBaseUnits(BigInt.parse(_availableBalance!), _spendDecimals)} '
+                        '$_spendSymbol',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                      if (_availableBalance != '0' && !state.isBusy)
+                        GestureDetector(
+                          onTap: _useMax,
+                          child: Text(
+                            'Max',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: color,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                ],
                 TextField(
                   controller: _amountController,
                   enabled: !state.isBusy,

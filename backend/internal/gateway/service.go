@@ -345,6 +345,12 @@ type ActivityView struct {
 	BlockNumber *int64    `json:"blockNumber,omitempty"`
 	Reason      string    `json:"reason,omitempty"`
 	CreatedAt   time.Time `json:"createdAt"`
+
+	// The trade's other leg -- see store.Activity.QuoteAsset's doc for why
+	// this is only ever present once a real fill exists for the operation.
+	QuoteAsset    string `json:"quoteAsset,omitempty"`
+	QuoteAmount   string `json:"quoteAmount,omitempty"`
+	QuoteDecimals int32  `json:"quoteDecimals,omitempty"`
 }
 
 type ActivityListView struct {
@@ -426,23 +432,73 @@ func (s *Service) Config() ConfigView {
 	return out
 }
 
-// Balances reads every sponsored token's balanceOf for holder, live from
-// chain — there is no ledger table for this yet (internal/treasury is still
-// a stub, see CLAUDE.md's Known gaps), so "the balance" is defined as
-// whatever the token contract itself currently says, not a cached or
-// indexed number that could drift from it.
+// balanceToken is what Balances needs to look one up -- symbol/decimals for
+// display, plus whether it's native MON (the zero address, same convention
+// markets.base_token uses for MON-AUSD/MON-USDC) rather than an ERC-20.
+type balanceToken struct {
+	address  common.Address
+	symbol   string
+	decimals int32
+}
+
+// Balances reads every relevant token's balance for holder, live from chain
+// — there is no ledger table for this yet (internal/treasury is still a
+// stub, see CLAUDE.md's Known gaps), so "the balance" is defined as whatever
+// the token contract (or, for MON, the account's own native balance)
+// currently says, not a cached or indexed number that could drift from it.
+//
+// "Relevant" is every sponsored token plus every base/quote token any
+// enabled market trades -- what a person can hold was never actually
+// limited to what the paymaster happens to sponsor gas for, and a MON-USDC
+// trade leaves MON or USDC sitting in the account whether or not either is
+// sponsored. The mobile client already filters this down to nonzero
+// balances (portfolio_screen.dart) so an unheld token here just doesn't
+// show, the same way an unheld sponsored token already didn't.
 func (s *Service) Balances(ctx context.Context, holder common.Address) (*BalancesView, error) {
+	seen := make(map[common.Address]balanceToken)
+	for _, t := range s.cfg.Tokens {
+		seen[t.Address] = balanceToken{t.Address, t.Symbol, t.Decimals}
+	}
+	if s.d.Markets != nil {
+		markets, err := s.d.Markets.ListMarkets(ctx)
+		if err != nil {
+			return nil, fail(KindUpstream, "store", "could not read markets", err)
+		}
+		for _, m := range markets {
+			parts := strings.SplitN(m.Symbol, "-", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			base := common.BytesToAddress(m.BaseToken)
+			if _, ok := seen[base]; !ok {
+				seen[base] = balanceToken{base, parts[0], m.BaseDec}
+			}
+			quote := common.BytesToAddress(m.QuoteToken)
+			if _, ok := seen[quote]; !ok {
+				seen[quote] = balanceToken{quote, parts[1], m.QuoteDec}
+			}
+		}
+	}
+
 	out := &BalancesView{
 		Address:  holder.Hex(),
-		Balances: make([]BalanceView, 0, len(s.cfg.Tokens)),
+		Balances: make([]BalanceView, 0, len(seen)),
 	}
-	for _, t := range s.cfg.Tokens {
-		bal, err := s.balanceOf(ctx, t.Address, holder)
+	for _, t := range seen {
+		var bal *big.Int
+		var err error
+		if t.address == (common.Address{}) {
+			// Native MON -- balanceOf is an ERC-20 call and has nothing
+			// sensible to return against an address with no contract code.
+			bal, err = s.d.Chain.Balance(ctx, holder.Hex())
+		} else {
+			bal, err = s.balanceOf(ctx, t.address, holder)
+		}
 		if err != nil {
 			return nil, err
 		}
 		out.Balances = append(out.Balances, BalanceView{
-			Token:  TokenView{Address: t.Address.Hex(), Symbol: t.Symbol, Decimals: t.Decimals},
+			Token:  TokenView{Address: t.address.Hex(), Symbol: t.symbol, Decimals: t.decimals},
 			Amount: bal.String(),
 		})
 	}
@@ -1213,6 +1269,15 @@ func (s *Service) AccountActivity(ctx context.Context, address common.Address, l
 			Amount: a.Amount, Decimals: a.Decimals, Status: a.Status,
 			Reason:    a.Reason,
 			CreatedAt: a.CreatedAt,
+		}
+		if a.QuoteAsset != nil {
+			view.QuoteAsset = *a.QuoteAsset
+		}
+		if a.QuoteAmount != nil {
+			view.QuoteAmount = *a.QuoteAmount
+		}
+		if a.QuoteDecimals != nil {
+			view.QuoteDecimals = *a.QuoteDecimals
 		}
 		if len(a.UserOpHash) > 0 {
 			view.UserOpHash = "0x" + common.Bytes2Hex(a.UserOpHash)

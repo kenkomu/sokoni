@@ -432,6 +432,47 @@ func TestBalancesReadsEverySponsoredToken(t *testing.T) {
 	}
 }
 
+// A person's portfolio was never actually limited to whichever token the
+// paymaster happens to sponsor gas for -- a MON-USDC trade leaves MON in the
+// account whether or not MON itself is sponsored.
+func TestBalancesIncludesEveryMarketToken(t *testing.T) {
+	r := newRig(t)
+	r.chain.balance = big.NewInt(7_000_000)
+	r.markets.markets = []store.Market{nativeMarket()}
+
+	got, err := r.svc.Balances(context.Background(), testAccount)
+	if err != nil {
+		t.Fatalf("Balances: %v", err)
+	}
+	// nativeMarket's quote is testToken, already sponsored -- the market
+	// token list must dedupe against it, not double it, so this is exactly
+	// {TST, native MON}, not three entries.
+	if len(got.Balances) != 2 {
+		t.Fatalf("len(Balances) = %d, want 2: %+v", len(got.Balances), got.Balances)
+	}
+	var sawTST, sawMON bool
+	for _, b := range got.Balances {
+		switch {
+		case b.Token.Address == testToken.Hex():
+			sawTST = true
+			if b.Token.Symbol != "TST" {
+				t.Errorf("sponsored token symbol = %s, want TST (sponsored config wins over the market's MON-USDC quote name)", b.Token.Symbol)
+			}
+		case b.Token.Address == (common.Address{}).Hex():
+			sawMON = true
+			if b.Token.Symbol != "MON" || b.Token.Decimals != 18 {
+				t.Errorf("native token = %+v, want MON/18", b.Token)
+			}
+			if b.Amount != "7000000" {
+				t.Errorf("native amount = %s, want 7000000", b.Amount)
+			}
+		}
+	}
+	if !sawTST || !sawMON {
+		t.Fatalf("missing an expected token: %+v", got.Balances)
+	}
+}
+
 // The whole Phase 1 loop, minus the phone and the chain: register, prepare,
 // sign the challenge, submit, watch it land.
 func TestFullLoopWithTheTestPasskey(t *testing.T) {

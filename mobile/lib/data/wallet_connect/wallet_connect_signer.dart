@@ -44,6 +44,23 @@ class WalletConnectSigner implements Signer {
   Future<void> disconnect() =>
       WalletConnectService.disconnect(_client, _session);
 
+  /// Reconnects the relay websocket if Android suspended it while the app
+  /// was backgrounded. The connect sheet already does this for itself while
+  /// it's on screen (see its didChangeAppLifecycleState) — but that
+  /// observer is gone the moment sign-in finishes and the sheet is popped,
+  /// while this signer, and the need to reconnect, live for the rest of the
+  /// signed-in session. Without a second observer at that longer lifetime,
+  /// _openWallet backgrounding Sokoni to bring the wallet forward is itself
+  /// what triggers the suspend, and nothing ever reconnects before the next
+  /// [sign] tries to use the same dead socket — the exact "stuck on Waiting
+  /// for your signature" this fixes. See AppShell for where this is called.
+  void ensureRelayConnected() {
+    final relay = _client.core.relayClient;
+    if (!relay.isConnected) {
+      relay.connect();
+    }
+  }
+
   @override
   Future<Uint8List> sign(Uint8List hash) async {
     // Message hex first, address second — the standard personal_sign

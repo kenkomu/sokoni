@@ -111,10 +111,31 @@ class _ActivityTile extends StatelessWidget {
       'transfer' => 'Transfer ${item.asset}',
       _ => _capitalise(item.kind),
     };
+    // item.asset/amount is always the *base* leg (see the gateway's own
+    // ActivityView.QuoteAsset doc) -- which side is "spent" vs "received"
+    // still depends on which way the trade went. Only known once a real
+    // fill exists (quoteAsset null until then), so a still-pending trade
+    // just shows its base leg alone, same as before.
+    final quoteAmount = item.quoteAmount;
+    final quoteAsset = item.quoteAsset;
+    String legLine;
+    if (item.kind == 'trade' && quoteAmount != null && quoteAsset != null) {
+      final quote =
+          Money.fromBaseUnits(
+            BigInt.parse(quoteAmount),
+            item.quoteDecimals ?? 0,
+          ).toString();
+      legLine =
+          item.side == 'sell'
+              ? '$amount ${item.asset} → $quote $quoteAsset'
+              : '$quote $quoteAsset → $amount ${item.asset}';
+    } else {
+      legLine = item.asset.isEmpty ? '' : '$amount ${item.asset}';
+    }
     final subtitle =
-        item.asset.isEmpty
+        legLine.isEmpty
             ? _when(item.createdAt)
-            : '$amount ${item.asset} · ${_when(item.createdAt)}';
+            : '$legLine · ${_when(item.createdAt)}';
 
     return Material(
       color: theme.colorScheme.surfaceContainerLow,

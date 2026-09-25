@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/config.dart';
 import '../data/api/sokoni_api.dart';
 import '../data/signer.dart';
+import '../data/wallet_connect/wallet_connect_signer.dart';
 import '../features/home/home_screen.dart';
 import '../features/markets/markets_screen.dart';
 import '../features/portfolio/portfolio_screen.dart';
@@ -47,10 +48,36 @@ class AppShell extends StatefulWidget {
   State<AppShell> createState() => _AppShellState();
 }
 
-class _AppShellState extends State<AppShell> {
+class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   int _index = 0;
 
   void _goToMarkets() => setState(() => _index = 2);
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // See WalletConnectSigner.ensureRelayConnected's doc: without this, the
+  // sign-request flow itself (open the wallet app, which backgrounds
+  // Sokoni) is what causes the relay Android then suspends, and a trade
+  // signed anywhere past the initial connect sheet had nothing left to
+  // reconnect it.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    final signer = widget.signer;
+    if (signer is WalletConnectSigner) {
+      signer.ensureRelayConnected();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

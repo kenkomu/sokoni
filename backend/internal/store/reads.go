@@ -69,6 +69,14 @@ type Activity struct {
 	Reason      string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+
+	// The trade's other leg -- what was received on a sell, what was spent
+	// on a buy -- nil until a real fill exists for it (ListActivity's own
+	// doc explains why a prepared-but-unfilled operation has no second leg
+	// to report yet).
+	QuoteAsset    *string
+	QuoteAmount   *string
+	QuoteDecimals *int32
 }
 
 func (s *Store) UpsertActivity(ctx context.Context, a Activity) error {
@@ -107,7 +115,17 @@ func (s *Store) ListActivity(ctx context.Context, account []byte, limit int) ([]
 		with activity as (
 		  select op_id, smart_account, kind, market, side, asset, amount::text as amount,
 		         decimals, status, user_op_hash, tx_hash, block_number, reason,
-		         created_at, updated_at
+		         created_at, updated_at,
+		         -- A prepared/submitted operation has an intended spend
+		         -- amount but no fill yet, so there is no second leg to
+		         -- report -- a market order's actual output size isn't
+		         -- known until it lands (see order_sheet.dart's own "no
+		         -- minimum received guaranteed" notice). Once it lands, a
+		         -- real fills row takes over via the union branch below,
+		         -- so this only ever stays null for the brief window
+		         -- before that happens.
+		         null::text as quote_asset, null::text as quote_amount,
+		         null::smallint as quote_decimals
 		  from account_activity where smart_account=$1
 		  union all
 		  select 'fill:' || encode(f.tx_hash, 'hex') || ':' || f.log_index::text,
@@ -122,7 +140,15 @@ func (s *Store) ListActivity(ctx context.Context, account []byte, limit int) ([]
 		         -- divides back out by the real decimals sent alongside it.
 		         round(f.qty * power(10, m.base_dec)::numeric)::numeric(78,0)::text,
 		         m.base_dec, 'landed', decode('', 'hex'), f.tx_hash, f.block_number, '',
-		         f.block_time, f.block_time
+		         f.block_time, f.block_time,
+		         -- The other leg of the same fill -- what was received on a
+		         -- sell, what was spent on a buy -- computed from qty*px,
+		         -- both already on the row. No new column needed: unlike
+		         -- the "intended spend" a prepared op only has, a landed
+		         -- fill's counter-leg is exact, not estimated.
+		         split_part(f.market, '-', 2),
+		         round(f.qty * f.px * power(10, m.quote_dec)::numeric)::numeric(78,0)::text,
+		         m.quote_dec
 		  from fills f
 		  join accounts a on a.account_id=f.account_id
 		  join markets m on m.symbol=f.market
@@ -134,7 +160,7 @@ func (s *Store) ListActivity(ctx context.Context, account []byte, limit int) ([]
 		)
 		select op_id, smart_account, kind, market, side, asset, amount,
 		       decimals, status, user_op_hash, tx_hash, block_number, reason,
-		       created_at, updated_at
+		       created_at, updated_at, quote_asset, quote_amount, quote_decimals
 		from activity order by created_at desc limit $2`, account, limit)
 	if err != nil {
 		return nil, err
@@ -145,7 +171,8 @@ func (s *Store) ListActivity(ctx context.Context, account []byte, limit int) ([]
 		var a Activity
 		if err := rows.Scan(&a.OpID, &a.Account, &a.Kind, &a.Market, &a.Side, &a.Asset,
 			&a.Amount, &a.Decimals, &a.Status, &a.UserOpHash, &a.TxHash,
-			&a.BlockNumber, &a.Reason, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			&a.BlockNumber, &a.Reason, &a.CreatedAt, &a.UpdatedAt,
+			&a.QuoteAsset, &a.QuoteAmount, &a.QuoteDecimals); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
