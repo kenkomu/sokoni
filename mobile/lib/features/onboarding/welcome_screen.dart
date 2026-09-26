@@ -71,7 +71,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     // rest of the app on SokoniTheme.light() (see CLAUDE.md's decision on
     // the Figma UI kit only having a light surface).
     final theme = SokoniTheme.light();
-    final heroHeight = MediaQuery.of(context).size.height * 0.42;
+    final heroHeight = MediaQuery.of(context).size.height * 0.46;
     return Theme(
       data: theme,
       child: Scaffold(
@@ -92,16 +92,7 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        'Empower Your Financial Future with Crypto Trading',
-                        style: theme.textTheme.headlineMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                          height: 1.2,
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Discover the potential of digital assets. Trade, '
-                        'invest, and grow with confidence.',
+                        'Discover the potential of digital assets',
                         style: theme.textTheme.bodyLarge?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
@@ -109,40 +100,28 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                       const SizedBox(height: 24),
                       if (kDebugMode) ...[
                         _DebugPreviewCard(config: config),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: 12),
+                      ],
+                      _GradientPillButton(
+                        label: 'Connect a wallet',
+                        onPressed:
+                            () => showWalletConnectSheet(context, config),
+                      ),
+                      const SizedBox(height: 12),
+                      if (kDebugMode) ...[
                         // SPIKE, remove once the passkey path has a real
                         // button: proving one real device can complete a
                         // WebAuthn ceremony against a live assetlinks.json
                         // is the one open unknown gating the "Create a
                         // wallet" option — see docs/adr and CLAUDE.md's
                         // Known gaps.
-                        Center(
-                          child: TextButton(
-                            onPressed: () => showPasskeySheet(context, config),
-                            child: const Text('Create a wallet'),
-                          ),
+                        _OutlinePillButton(
+                          label: 'Create a wallet',
+                          onPressed: () => showPasskeySheet(context, config),
                         ),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: 12),
                       ],
-                      SizedBox(
-                        width: double.infinity,
-                        height: 58,
-                        child: FilledButton.icon(
-                          style: FilledButton.styleFrom(
-                            shape: const StadiumBorder(),
-                          ),
-                          onPressed:
-                              () => showWalletConnectSheet(context, config),
-                          icon: const Icon(
-                            Icons.account_balance_wallet_outlined,
-                          ),
-                          label: const Text(
-                            'Connect a wallet',
-                            style: TextStyle(fontSize: 18),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
+                      const SizedBox(height: 4),
                       Center(
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
@@ -326,48 +305,251 @@ class _WalletChip extends StatelessWidget {
   }
 }
 
-/// The gradient graphic at the top — a price-line motif over Sokoni's own
-/// tokens (MON, AUSD, USDC) rather than the source design's Bitcoin/Ethereum
-/// glyphs, since those aren't what this app actually trades.
+/// The primary CTA, styled after the "FINANCIAL MONEY APP" Figma community
+/// file's Sign In pill: a gradient fill sweeping through the hero's own
+/// palette (so the button reads as part of the same system, not a
+/// mismatched accent), a stadium shape, and a trailing arrow rather than an
+/// icon — the destination (a wallet-connect sheet) isn't a single glyph the
+/// way "wallet" was on the old icon button.
+class _GradientPillButton extends StatelessWidget {
+  const _GradientPillButton({required this.label, required this.onPressed});
+
+  final String label;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      height: 58,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(29),
+          gradient: const LinearGradient(
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+            colors: [Color(0xFF0063F5), Color(0xFF7C4DFF), Color(0xFF22D3C1)],
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF0063F5).withValues(alpha: 0.35),
+              blurRadius: 16,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(29),
+            onTap: onPressed,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      label,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  const Icon(Icons.arrow_forward, color: Colors.white),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The secondary CTA — same pill shape and arrow as [_GradientPillButton],
+/// outlined instead of filled, matching the reference's "Sign Up" pairing.
+class _OutlinePillButton extends StatelessWidget {
+  const _OutlinePillButton({required this.label, required this.onPressed});
+
+  final String label;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return SizedBox(
+      width: double.infinity,
+      height: 58,
+      child: OutlinedButton(
+        style: OutlinedButton.styleFrom(
+          shape: const StadiumBorder(),
+          side: BorderSide(color: theme.colorScheme.primary, width: 1.4),
+        ),
+        onPressed: onPressed,
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: theme.colorScheme.primary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            Icon(Icons.arrow_forward, color: theme.colorScheme.primary),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The gradient graphic at the top — two overlapping colour blobs (the
+/// reference's arcs) behind Sokoni's own tokens (MON, AUSD, USDC) rather than
+/// the source design's Bitcoin/Ethereum glyphs, since those aren't what this
+/// app actually trades, plus a logo mark and headline the source screen
+/// carries in its hero rather than the body below it.
 class _Hero extends StatelessWidget {
   const _Hero();
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return ClipRRect(
       borderRadius: const BorderRadius.vertical(bottom: Radius.circular(40)),
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: RadialGradient(
-            center: const Alignment(0.3, -0.4),
-            radius: 1.3,
-            colors: [
-              theme.colorScheme.primary,
-              const Color(0xFF0A1A5C),
-              const Color(0xFF060B1F),
-            ],
-          ),
-        ),
-        child: Stack(
-          children: [
-            Positioned.fill(child: CustomPaint(painter: _PriceLinePainter())),
-            const Positioned(
-              left: 28,
-              top: 60,
-              child: _HeroBubble(symbol: 'AUSD', size: 64),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final w = constraints.maxWidth;
+          final h = constraints.maxHeight;
+          return Container(
+            // The base the blobs sit on. A flat colour matching Blob B's own
+            // darkest stop, not a gradient toward navy — a two-tone base was
+            // visible as a hard dark wedge in the bottom-left corner, the one
+            // spot neither circle's bleed reliably reaches at every screen
+            // height, and a mismatched base colour there read as a bug
+            // rather than part of the composition.
+            decoration: const BoxDecoration(color: Color(0xFF5A35C4)),
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                // Blob A: teal-cyan, bleeding off the top-right corner —
+                // matches the reference's outer arc.
+                Positioned(
+                  top: -h * 0.35,
+                  right: -w * 0.5,
+                  child: Container(
+                    width: w * 1.5,
+                    height: w * 1.5,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [Color(0xFF22D3C1), Color(0xFF0063F5)],
+                      ),
+                    ),
+                  ),
+                ),
+                // Blob B: purple-magenta, sized generously past the hero's
+                // own corners (not just enough to reach them) so the base
+                // colour above is only ever a hairline fallback, never a
+                // visible wedge — the failure mode a smaller circle hit.
+                Positioned(
+                  top: -h * 0.75,
+                  left: -w * 0.7,
+                  child: Container(
+                    width: w * 1.9,
+                    height: w * 1.9,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [Color(0xFFB24DFF), Color(0xFF5A35C4)],
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned.fill(
+                  child: Opacity(
+                    opacity: 0.35,
+                    child: CustomPaint(painter: _PriceLinePainter()),
+                  ),
+                ),
+                Positioned(
+                  left: 24,
+                  top: 0,
+                  right: 24,
+                  child: SafeArea(
+                    bottom: false,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const _LogoMark(),
+                          const SizedBox(height: 18),
+                          Text(
+                            'Welcome to\nSokoni',
+                            style: Theme.of(
+                              context,
+                            ).textTheme.headlineMedium?.copyWith(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                              height: 1.15,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: 20,
+                  bottom: 24,
+                  child: Row(
+                    children: const [
+                      _HeroBubble(symbol: 'MON', size: 40),
+                      SizedBox(width: 8),
+                      _HeroBubble(symbol: 'AUSD', size: 40),
+                      SizedBox(width: 8),
+                      _HeroBubble(symbol: 'USDC', size: 40),
+                    ],
+                  ),
+                ),
+              ],
             ),
-            const Positioned(
-              right: 40,
-              top: 24,
-              child: _HeroBubble(symbol: 'MON', size: 72),
-            ),
-            const Positioned(
-              right: 24,
-              bottom: 28,
-              child: _HeroBubble(symbol: 'USDC', size: 64),
-            ),
-          ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// The reference's white rounded-square logo mark, redrawn as Sokoni's own
+/// initial rather than reusing an unrelated brand's glyph.
+class _LogoMark extends StatelessWidget {
+  const _LogoMark();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 48,
+      height: 48,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: const Text(
+        'S',
+        style: TextStyle(
+          color: Color(0xFF0063F5),
+          fontWeight: FontWeight.w800,
+          fontSize: 24,
         ),
       ),
     );
