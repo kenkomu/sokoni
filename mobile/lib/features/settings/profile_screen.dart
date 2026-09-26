@@ -3,24 +3,42 @@ import 'package:flutter/material.dart';
 import '../../core/config.dart';
 import '../../core/theme_mode.dart';
 import '../../data/api/sokoni_api.dart';
+import '../../data/mera/mera_key_service.dart';
+import '../../data/signer.dart';
+import '../../data/wallet_connect/wallet_connect_signer.dart';
 import '../../design/format.dart';
 
-/// Account identity and device settings. No password, no seed phrase — the
-/// only credential on this screen is the passkey itself, so "Security" shows
-/// what the passkey is bound to rather than a change-password flow.
+/// Account identity and device settings. Security used to hardcode
+/// "Passkey" here regardless of how the account actually signs — true for
+/// the WebAuthn path, wrong for a connected external wallet, which is the
+/// only production path today (see welcome_screen.dart). [signer]'s runtime
+/// type is the one place that distinction still exists this deep in the
+/// tree, so it's threaded through just for this label rather than adding a
+/// parallel "how did we sign in" enum.
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({
     required this.config,
     required this.account,
     required this.onLogout,
+    this.signer,
     this.onSwitchWallet,
     super.key,
   });
 
   final AppConfig config;
   final AccountInfo account;
+
+  /// Null for the passkey/WebAuthn path (not a [Signer] — see
+  /// AppShell.signer's own doc). [LocalKeySigner] for an on-device Mera key,
+  /// [WalletConnectSigner] for an external wallet — each gets its own
+  /// Security copy below rather than one label that's only accurate for one
+  /// of the three.
+  final Signer? signer;
   final Future<void> Function() onLogout;
   final Future<void> Function()? onSwitchWallet;
+
+  bool get _isExternalWallet => signer is WalletConnectSigner;
+  bool get _isLocalKey => signer is LocalKeySigner;
 
   @override
   Widget build(BuildContext context) {
@@ -76,7 +94,11 @@ class ProfileScreen extends StatelessWidget {
               icon: Icons.shield_outlined,
               label: 'Security',
               subtitle:
-                  'Passkey · ${account.deployed ? 'deployed' : 'counterfactual'}',
+                  _isExternalWallet
+                      ? 'External wallet · ${account.deployed ? 'deployed' : 'counterfactual'}'
+                      : _isLocalKey
+                      ? 'Device key · ${account.deployed ? 'deployed' : 'counterfactual'}'
+                      : 'Passkey · ${account.deployed ? 'deployed' : 'counterfactual'}',
               onTap: () => _showSecurityDetails(context),
             ),
             _MenuTile(
@@ -112,11 +134,91 @@ class ProfileScreen extends StatelessWidget {
     );
   }
 
-  /// Explains *why* a passkey is safer, not just that it is — a bare address
-  /// dialog answers "what do I have" but not "why should I trust this",
-  /// which is the actual question a first-time crypto user has.
+  /// Explains *why* the account is safe, not just what it is — a bare
+  /// address dialog answers "what do I have" but not "why should I trust
+  /// this", which is the actual question a first-time crypto user has. The
+  /// three points differ by [signer] type since the true claim differs: an
+  /// external wallet's key isn't on this device at all, so the WebAuthn
+  /// copy ("bound to this device's secure hardware") would be a false
+  /// promise for the only path production actually offers today.
   void _showSecurityDetails(BuildContext context) {
     final theme = Theme.of(context);
+    final (title, points) = switch ((_isExternalWallet, _isLocalKey)) {
+      (true, _) => (
+        'Your external wallet',
+        [
+          const _SecurityPoint(
+            icon: Icons.smartphone,
+            text:
+                'Your key lives in your wallet app, not here. Sokoni never '
+                'sees it — every trade is signed over WalletConnect and '
+                'sent back approved, never handed over.',
+          ),
+          const _SecurityPoint(
+            icon: Icons.key_off,
+            text:
+                'No shared secret crosses the network. Sokoni only ever '
+                'receives a signature, never anything that could be reused '
+                'to sign on your behalf.',
+          ),
+          const _SecurityPoint(
+            icon: Icons.local_gas_station_outlined,
+            text:
+                'Sokoni sponsors gas for you, so this account never needs '
+                'to hold MON to trade.',
+          ),
+        ],
+      ),
+      (false, true) => (
+        'Your device key',
+        [
+          const _SecurityPoint(
+            icon: Icons.smartphone,
+            text:
+                'Generated and held on this device. There is no seed '
+                'phrase to write down, lose, or have phished.',
+          ),
+          const _SecurityPoint(
+            icon: Icons.key_off,
+            text:
+                'No shared secret. Nothing crosses the network that a copy '
+                'could reuse to sign on your behalf.',
+          ),
+          const _SecurityPoint(
+            icon: Icons.local_gas_station_outlined,
+            text:
+                'Sokoni sponsors gas for you, so this account never needs '
+                'to hold MON to trade.',
+          ),
+        ],
+      ),
+      (false, false) => (
+        'Your passkey',
+        [
+          const _SecurityPoint(
+            icon: Icons.memory,
+            text:
+                'Bound to this device’s secure hardware. It never '
+                'leaves, so there’s nothing to leak or phish — unlike '
+                'a password or seed phrase.',
+          ),
+          const _SecurityPoint(
+            icon: Icons.key_off,
+            text:
+                'No shared secret. A password proves you know '
+                'something; a passkey proves you hold something — '
+                'nothing crosses the network that a copy could reuse.',
+          ),
+          _SecurityPoint(
+            icon: Icons.domain_verification,
+            text:
+                'Scoped to ${config.relyingPartyId} by the platform '
+                'itself. A lookalike site cannot ask your device to '
+                'sign for it, even if it fools you visually.',
+          ),
+        ],
+      ),
+    };
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -129,29 +231,9 @@ class ProfileScreen extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Your passkey', style: theme.textTheme.titleLarge),
+                  Text(title, style: theme.textTheme.titleLarge),
                   const SizedBox(height: 16),
-                  const _SecurityPoint(
-                    icon: Icons.memory,
-                    text:
-                        'Bound to this device’s secure hardware. It never '
-                        'leaves, so there’s nothing to leak or phish — unlike '
-                        'a password or seed phrase.',
-                  ),
-                  const _SecurityPoint(
-                    icon: Icons.key_off,
-                    text:
-                        'No shared secret. A password proves you know '
-                        'something; a passkey proves you hold something — '
-                        'nothing crosses the network that a copy could reuse.',
-                  ),
-                  _SecurityPoint(
-                    icon: Icons.domain_verification,
-                    text:
-                        'Scoped to ${config.relyingPartyId} by the platform '
-                        'itself. A lookalike site cannot ask your device to '
-                        'sign for it, even if it fools you visually.',
-                  ),
+                  ...points,
                   const SizedBox(height: 8),
                   const Divider(),
                   const SizedBox(height: 8),

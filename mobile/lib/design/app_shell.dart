@@ -100,6 +100,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
           ProfileScreen(
             config: widget.config,
             account: widget.account,
+            signer: widget.signer,
             onLogout: widget.onLogout,
             onSwitchWallet: widget.onSwitchWallet,
           ),

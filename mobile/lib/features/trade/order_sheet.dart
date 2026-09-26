@@ -224,7 +224,7 @@ class _OrderSheetState extends State<_OrderSheet> {
                     children: [
                       Text(
                         'Available: '
-                        '${Money.fromBaseUnits(BigInt.parse(_availableBalance!), _spendDecimals)} '
+                        '${formatAmount(Money.fromBaseUnits(BigInt.parse(_availableBalance!), _spendDecimals))} '
                         '$_spendSymbol',
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,

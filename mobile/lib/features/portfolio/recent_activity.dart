@@ -101,11 +101,9 @@ class _ActivityTile extends StatelessWidget {
       ),
       _ => ('Checking', Icons.help_outline, theme.colorScheme.onSurfaceVariant),
     };
-    final amount =
-        Money.fromBaseUnits(
-          BigInt.parse(item.amount),
-          item.decimals,
-        ).toString();
+    final amount = formatAmount(
+      Money.fromBaseUnits(BigInt.parse(item.amount), item.decimals),
+    );
     final title = switch (item.kind) {
       'trade' => '${_capitalise(item.side)} ${item.market}',
       'transfer' => 'Transfer ${item.asset}',
@@ -120,11 +118,9 @@ class _ActivityTile extends StatelessWidget {
     final quoteAsset = item.quoteAsset;
     String legLine;
     if (item.kind == 'trade' && quoteAmount != null && quoteAsset != null) {
-      final quote =
-          Money.fromBaseUnits(
-            BigInt.parse(quoteAmount),
-            item.quoteDecimals ?? 0,
-          ).toString();
+      final quote = formatAmount(
+        Money.fromBaseUnits(BigInt.parse(quoteAmount), item.quoteDecimals ?? 0),
+      );
       legLine =
           item.side == 'sell'
               ? '$amount ${item.asset} → $quote $quoteAsset'
@@ -162,17 +158,33 @@ class _ActivityTile extends StatelessWidget {
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
                     ),
-                    if (item.reason != null &&
-                        item.reason!.isNotEmpty &&
-                        (item.status == 'failed' ||
-                            item.status == 'reverted')) ...[
+                    if (item.status == 'failed' || item.status == 'reverted')
+                      if (item.reason != null && item.reason!.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          item.reason!,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.error,
+                          ),
+                        ),
+                      ],
+                    // The gateway never records *why* a prepared operation
+                    // expired (its own reason column is always blank for
+                    // this status — it's a Redis TTL lapsing, not a
+                    // decodable failure), so this is a fixed explanation
+                    // rather than an empty-looking "Expired" chip with
+                    // nothing underneath it.
+                    if (item.status == 'expired') ...[
                       const SizedBox(height: 4),
                       Text(
-                        item.reason!,
+                        'The signing window closed before this was '
+                        'submitted — no funds moved.',
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.error,
+                          color: theme.colorScheme.onSurfaceVariant,
                         ),
                       ),
                     ],

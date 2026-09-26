@@ -2,6 +2,8 @@ import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../core/money.dart';
+
 /// `0xD3918f...583287` — enough to recognise, never enough to mistake for
 /// another address.
 String shortAddress(String address) {
@@ -63,6 +65,18 @@ Future<void> copyAddress(BuildContext context, String address) async {
 /// safe in a way it would not be for a balance.
 String formatPrice(String raw, {int maxDecimals = 6}) {
   final value = Decimal.parse(raw);
+  return value.round(scale: maxDecimals).toString();
+}
+
+/// Rounds a [Money] amount for *display*, the same lossy-only-for-display
+/// contract [formatPrice] has — [Money.toString] itself stays exact (it
+/// backs real arithmetic elsewhere, e.g. order_sheet.dart's Max button), so
+/// this is a separate helper rather than a change to Money.toString itself.
+/// Without it, an 18-decimal token like MON prints every fractional digit
+/// base-unit division leaves behind (`247.0111641544 MON`), which reads as
+/// noise, not precision, in a list of trades.
+String formatAmount(Money amount, {int maxDecimals = 6}) {
+  final value = Decimal.parse(amount.toString());
   return value.round(scale: maxDecimals).toString();
 }
 

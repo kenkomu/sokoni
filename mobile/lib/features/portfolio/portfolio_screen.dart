@@ -1,3 +1,4 @@
+import 'package:decimal/decimal.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/config.dart';
@@ -70,7 +71,11 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
             children: [
-              _AccountCard(account: widget.account),
+              _AccountCard(
+                account: widget.account,
+                balances: state.balances,
+                prices: state.prices,
+              ),
               const SizedBox(height: 24),
               Text(
                 'Balances',
@@ -221,13 +226,21 @@ class _ExploreMarketsCard extends StatelessWidget {
 }
 
 class _AccountCard extends StatelessWidget {
-  const _AccountCard({required this.account});
+  const _AccountCard({
+    required this.account,
+    required this.balances,
+    required this.prices,
+  });
 
   final AccountInfo account;
+  final List<AccountBalance>? balances;
+  final Map<String, Decimal>? prices;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final balances = this.balances;
+    final prices = this.prices;
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -244,6 +257,21 @@ class _AccountCard extends StatelessWidget {
               fontWeight: FontWeight.w700,
             ),
           ),
+          const SizedBox(height: 4),
+          // Both must have loaded — a total computed from balances alone
+          // (before prices arrive) would flash a wrong, too-low number for
+          // the one moment prices is still null, and this is the first
+          // thing on the screen a new user's eye lands on.
+          if (balances != null && prices != null)
+            _TotalValue(balances: balances, prices: prices)
+          else
+            Text(
+              '···',
+              style: theme.textTheme.headlineMedium?.copyWith(
+                color: theme.colorScheme.onPrimary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
           const SizedBox(height: 12),
           // The whole row is the tap target, not just the icon: this is the
           // one screen that tells people to send funds here, so copying the
@@ -296,6 +324,47 @@ class _AccountCard extends StatelessWidget {
   }
 }
 
+/// The one number a trading app's own portfolio screen is expected to lead
+/// with — total value across every held token, in USDC. Not shown before
+/// this session's redesign: balances existed but nothing summed them, so a
+/// new user with five different tokens had to do that arithmetic themselves.
+class _TotalValue extends StatelessWidget {
+  const _TotalValue({required this.balances, required this.prices});
+
+  final List<AccountBalance> balances;
+  final Map<String, Decimal> prices;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final (total, allPriced) = totalValueUsdc(balances, prices);
+    final display = total.round(scale: 2).toString();
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
+      children: [
+        Text(
+          '\$$display',
+          style: theme.textTheme.headlineMedium?.copyWith(
+            color: theme.colorScheme.onPrimary,
+            fontWeight: FontWeight.w700,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+        if (!allPriced) ...[
+          const SizedBox(width: 6),
+          Text(
+            '+ more',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onPrimary.withValues(alpha: 0.75),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
 class _BalanceTile extends StatelessWidget {
   const _BalanceTile({required this.balance});
 
@@ -324,7 +393,7 @@ class _BalanceTile extends StatelessWidget {
               ),
             ),
             Text(
-              money.toString(),
+              formatAmount(money),
               style: theme.textTheme.titleMedium?.copyWith(
                 fontFeatures: const [FontFeature.tabularFigures()],
               ),
