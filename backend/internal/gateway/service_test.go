@@ -892,6 +892,36 @@ func TestTradeRefusesBelowMinSize(t *testing.T) {
 	}
 }
 
+// A buy is sized in the quote asset, so unlike a sell (checked directly
+// against MinQty above) it needs a recent trade price to translate "how
+// much USDC" into "how much MON this implies" before MinQty even applies --
+// this is the check that closed the BTC-USDC gap (a $6.57 buy silently
+// reverted on-chain with TransferFailed() instead of a clean error, since
+// the buy branch checked only quoteRaw.Sign() == 0).
+func TestTradeBuyRefusesBelowMinSizeAtTheLastTradedPrice(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	if _, err := r.svc.Register(ctx, cred, gPasskey()); err != nil {
+		t.Fatal(err)
+	}
+	m := nativeMarket() // MinQty 200 MON
+	r.markets.markets = []store.Market{m}
+	r.markets.trades["MON-USDC"] = []store.Trade{{Px: "0.5"}}                 // 0.5 USDC/MON
+	r.chain.set(func(f *fakeChain) { f.balance = big.NewInt(1_000_000_000) }) // 1,000 USDC @ 6dp
+
+	// 10 USDC / 0.5 USDC-per-MON = 20 MON, far below the 200 MON minimum.
+	tooSmall := trade("MON-USDC", "buy", "10000000")
+	if _, err := r.svc.Prepare(ctx, cred, tooSmall); errCode(err) != "below_min_size" {
+		t.Fatalf("got %v, want below_min_size", err)
+	}
+
+	// 200 USDC / 0.5 USDC-per-MON = 400 MON, comfortably at/above minimum.
+	enough := trade("MON-USDC", "buy", "200000000")
+	if _, err := r.svc.Prepare(ctx, cred, enough); err != nil {
+		t.Fatalf("Prepare with an adequate buy size: %v", err)
+	}
+}
+
 func TestTradeRefusesInsufficientBalance(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()

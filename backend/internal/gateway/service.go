@@ -799,6 +799,19 @@ func (s *Service) buildTradeCallData(ctx context.Context, in Intent, accountAddr
 			return nil, fail(KindInvalid, "bad_amount",
 				"amount is below this market's smallest tradable size", nil)
 		}
+		// A buy's amount is quote-denominated, so unlike a sell it can't be
+		// checked against MinQty (a base-asset size) directly -- estimated
+		// instead from the market's own latest trade price, the same number
+		// the trade screen's own price header is showing. Not exact (a
+		// market order fills at whatever the book actually offers, not this
+		// snapshot), but enough to catch a buy that's obviously too small
+		// before it wastes gas reverting on-chain with a bare
+		// TransferFailed() instead of failing here with a clear reason --
+		// exactly what let a real $6.58 BTC buy revert uncaught (BTC-USDC's
+		// 0.000125 min size is worth ~$10.49 at the price that reverted on).
+		if err := s.checkBuyMeetsMinSize(ctx, m, actualWei); err != nil {
+			return nil, err
+		}
 		if inner, err = venue.EncodePlaceAndExecuteMarketBuy(quoteRaw, minAmountOut, false, false); err != nil {
 			return nil, fail(KindInvalid, "encode", "could not encode the buy order", err)
 		}
@@ -846,6 +859,42 @@ func (s *Service) buildTradeCallData(ctx context.Context, in Intent, accountAddr
 		return nil, fail(KindInvalid, "encode", "could not encode the call", err)
 	}
 	return callData, nil
+}
+
+// checkBuyMeetsMinSize estimates a buy's implied base-asset size from the
+// market's own most recent trade price and rejects it if that's under
+// MinQty -- see buildTradeCallData's call site for why a buy needs this at
+// all (its amount is quote-denominated, so unlike a sell there's no size to
+// compare against MinQty directly). No recent trade, or one that doesn't
+// parse, means nothing to estimate against -- lets the order through rather
+// than blocking a market with no trade history yet on a check that can't
+// run.
+func (s *Service) checkBuyMeetsMinSize(ctx context.Context, m store.Market, quoteWei *big.Int) error {
+	trades, err := s.d.Markets.RecentTrades(ctx, m.Symbol, 1)
+	if err != nil || len(trades) == 0 {
+		return nil
+	}
+	price, ok := new(big.Rat).SetString(trades[0].Px)
+	if !ok || price.Sign() <= 0 {
+		return nil
+	}
+	minQty, ok := new(big.Rat).SetString(m.MinQty)
+	if !ok {
+		return nil
+	}
+	quoteMul := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(m.QuoteDec)), nil)
+	quoteHuman := new(big.Rat).SetFrac(quoteWei, quoteMul)
+	impliedBase := new(big.Rat).Quo(quoteHuman, price)
+	if impliedBase.Cmp(minQty) >= 0 {
+		return nil
+	}
+	baseSymbol := m.Symbol
+	if parts := strings.SplitN(m.Symbol, "-", 2); len(parts) == 2 {
+		baseSymbol = parts[0]
+	}
+	return fail(KindInvalid, "below_min_size", fmt.Sprintf(
+		"at the current price (~%s), this buys about %s %s — below this market's minimum size of %s %s",
+		trades[0].Px, impliedBase.FloatString(8), baseSymbol, m.MinQty, baseSymbol), nil)
 }
 
 // ------------------------------------------------------------------ submit

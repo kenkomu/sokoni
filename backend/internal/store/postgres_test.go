@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,14 +33,29 @@ func testStore(t *testing.T) *Store {
 }
 
 // fakeVenue hands back a fixed set of logs regardless of the requested
-// window, so a test can pin exactly which Trade the decoder sees.
+// window, so a test can pin exactly which Trade the decoder sees. It does
+// filter by address, though -- real eth_getLogs does, and applyTrades now
+// calls GetLogs once per enabled market (see postgres.go's own comment on
+// why: one call over the window, not per block); a fake that ignored
+// address would hand every market the same log and let whichever market
+// happens to be processed first "win" the tx_hash/log_index dedup, which is
+// exactly the flakiness a real eth_getLogs call would never produce.
 type fakeVenue struct {
 	logs []chain.Log
 	err  error
 }
 
-func (f *fakeVenue) GetLogs(_ context.Context, _ string, _ []string, _, _ uint64) ([]chain.Log, error) {
-	return f.logs, f.err
+func (f *fakeVenue) GetLogs(_ context.Context, address string, _ []string, _, _ uint64) ([]chain.Log, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	var out []chain.Log
+	for _, lg := range f.logs {
+		if strings.EqualFold(lg.Address, address) {
+			out = append(out, lg)
+		}
+	}
+	return out, nil
 }
 
 // A Trade log shaped the same way as internal/venue's synthetic fixture, on

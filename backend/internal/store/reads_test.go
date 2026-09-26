@@ -21,10 +21,16 @@ func TestListMarketsReturnsEnabledOnly(t *testing.T) {
 	for _, m := range markets {
 		bySymbol[m.Symbol] = m
 	}
-	for _, want := range []string{"MON-USDC", "MON-AUSD"} {
+	// MON-AUSD was seeded by 0002 too but is disabled by 0012 -- its
+	// venue-side orderbook has zero bids and zero asks (checked live against
+	// mainnet 2026-09-26), so ListMarkets rightly excludes it now.
+	for _, want := range []string{"MON-USDC", "ETH-USDC", "BTC-USDC", "XAUt0-USDC"} {
 		if _, ok := bySymbol[want]; !ok {
-			t.Errorf("ListMarkets did not include %s, seeded by 0002_fills_market_tape.sql", want)
+			t.Errorf("ListMarkets did not include %s, expected enabled", want)
 		}
+	}
+	if _, ok := bySymbol["MON-AUSD"]; ok {
+		t.Error("ListMarkets included MON-AUSD, expected disabled by 0012 (empty orderbook)")
 	}
 
 	m, ok := bySymbol["MON-USDC"]
@@ -61,15 +67,29 @@ func TestMarketBySymbolNotFound(t *testing.T) {
 
 func TestMarketBySymbolFindsASeededMarket(t *testing.T) {
 	s := testStore(t)
-	m, found, err := s.MarketBySymbol(context.Background(), "MON-AUSD")
+	m, found, err := s.MarketBySymbol(context.Background(), "MON-USDC")
 	if err != nil {
 		t.Fatalf("MarketBySymbol: %v", err)
 	}
 	if !found {
-		t.Fatal("MON-AUSD not found, expected it seeded by 0002_fills_market_tape.sql")
+		t.Fatal("MON-USDC not found, expected it seeded by 0002_fills_market_tape.sql")
 	}
 	if m.Venue != "kuru" {
 		t.Errorf("venue = %q, want kuru", m.Venue)
+	}
+}
+
+// MarketBySymbol filters on `enabled` same as ListMarkets, so a disabled
+// symbol -- even one that still has a row -- is reported not-found, not
+// returned with a "you should check enabled yourself" trap.
+func TestMarketBySymbolExcludesDisabled(t *testing.T) {
+	s := testStore(t)
+	_, found, err := s.MarketBySymbol(context.Background(), "MON-AUSD")
+	if err != nil {
+		t.Fatalf("MarketBySymbol: %v", err)
+	}
+	if found {
+		t.Error("found = true for MON-AUSD, expected disabled by 0012 (empty orderbook)")
 	}
 }
 
