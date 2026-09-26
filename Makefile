@@ -59,6 +59,16 @@ dart-check: ## Format check, analyze, test
 fixture-sync: ## Copy the WebAuthn vector from contracts to mobile
 	cp contracts/test/fixtures/webauthn_vector.json mobile/test/fixtures/webauthn_vector.json
 
+.PHONY: mobile-release
+mobile-release: ## Build a release APK pinned at the production gateway (needs WALLETCONNECT_PROJECT_ID)
+	@test -n "$(WALLETCONNECT_PROJECT_ID)" || (echo "WALLETCONNECT_PROJECT_ID is unset -- a plain 'flutter build apk' silently ships with wallet connect disabled and pointed at the Android emulator loopback instead of production. Get the id from cloud.reown.com and pass it: make mobile-release WALLETCONNECT_PROJECT_ID=..." && exit 1)
+	cd mobile && flutter build apk --release \
+		--dart-define=SOKONI_API=https://sokoni.bitshada.com \
+		--dart-define=SOKONI_WS=wss://sokoni.bitshada.com/v1/stream \
+		--dart-define=SOKONI_CHAIN_ID=143 \
+		--dart-define=SOKONI_RP_ID=sokoni.bitshada.com \
+		--dart-define=WALLETCONNECT_PROJECT_ID=$(WALLETCONNECT_PROJECT_ID)
+
 ## -- contracts --------------------------------------------------------------
 
 .PHONY: sol-check
