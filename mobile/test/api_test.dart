@@ -178,6 +178,26 @@ void main() {
     });
   });
 
+  group('assist', () {
+    test('posts the question and returns the answer text', () async {
+      final gw =
+          FakeGateway()..on(
+            'POST',
+            '/v1/accounts/0xACC7/assistant',
+            (_) => (
+              status: 200,
+              body: {'answer': 'Your last trade expired — no funds moved.'},
+            ),
+          );
+
+      final answer = await gw.api().assist('0xACC7', 'why did my trade fail?');
+
+      final body = gw.lastBody('POST', '/v1/accounts/0xACC7/assistant');
+      expect(body['question'], 'why did my trade fail?');
+      expect(answer, 'Your last trade expired — no funds moved.');
+    });
+  });
+
   group('errors', () {
     test('carry the message the gateway wrote for a person', () async {
       final gw =

@@ -74,6 +74,14 @@ type ActivityData interface {
 	ListActivity(context.Context, []byte, int) ([]store.Activity, error)
 }
 
+// Assistant answers one grounded support question — see
+// internal/assistant's own doc for why grounding, not open chat. Left nil
+// (no ANTHROPIC_API_KEY configured) the same way Markets/MeraAccounts are:
+// Assist answers KindUpstream rather than the gateway refusing to start.
+type Assistant interface {
+	Ask(ctx context.Context, question, grounding string) (string, error)
+}
+
 // Token is an ERC-20 the paymaster will sponsor transfers of.
 type Token struct {
 	Address  common.Address
@@ -163,6 +171,7 @@ type Deps struct {
 	Ops          PendingOps
 	Markets      MarketData
 	Activity     ActivityData
+	Assistant    Assistant
 	Log          *slog.Logger
 	Now          func() time.Time
 }
@@ -1366,6 +1375,61 @@ func (s *Service) AccountActivity(ctx context.Context, address common.Address, l
 		out.Activity = append(out.Activity, view)
 	}
 	return out, nil
+}
+
+type AssistView struct {
+	Answer string `json:"answer"`
+}
+
+// Assist answers one question about the account, grounded in its real
+// balances and recent activity — gathered here, the same way Balances and
+// AccountActivity already read them, and handed to internal/assistant as
+// plain text rather than raw structs, so the LLM-facing shape can change
+// without touching either of those. Balances/activity read failures don't
+// fail the question -- an assistant that can answer from partial data
+// (or none) is better than one that refuses because one read timed out.
+func (s *Service) Assist(ctx context.Context, address common.Address, question string) (*AssistView, error) {
+	if s.d.Assistant == nil {
+		return nil, fail(KindUpstream, "assistant_unavailable", "the assistant is unavailable", nil)
+	}
+	question = strings.TrimSpace(question)
+	if question == "" {
+		return nil, fail(KindInvalid, "empty_question", "question must not be empty", nil)
+	}
+
+	var b strings.Builder
+	if balances, err := s.Balances(ctx, address); err == nil {
+		if len(balances.Balances) == 0 {
+			b.WriteString("Balances: none held.\n")
+		} else {
+			b.WriteString("Balances:\n")
+			for _, bal := range balances.Balances {
+				fmt.Fprintf(&b, "- %s %s\n", bal.Amount, bal.Token.Symbol)
+			}
+		}
+	}
+	if s.d.Activity != nil {
+		if rows, err := s.d.Activity.ListActivity(ctx, address.Bytes(), 10); err == nil {
+			if len(rows) == 0 {
+				b.WriteString("Recent activity: none yet.\n")
+			} else {
+				b.WriteString("Recent activity (most recent first):\n")
+				for _, a := range rows {
+					fmt.Fprintf(&b, "- %s %s %s: %s", a.CreatedAt.Format(time.RFC3339), a.Kind, a.Market, a.Status)
+					if a.Reason != "" {
+						fmt.Fprintf(&b, " (%s)", a.Reason)
+					}
+					b.WriteString("\n")
+				}
+			}
+		}
+	}
+
+	answer, err := s.d.Assistant.Ask(ctx, question, b.String())
+	if err != nil {
+		return nil, fail(KindUpstream, "assistant", "could not reach the assistant", err)
+	}
+	return &AssistView{Answer: answer}, nil
 }
 
 // ------------------------------------------------------------------ chain reads

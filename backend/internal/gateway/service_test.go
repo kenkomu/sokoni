@@ -1035,6 +1035,58 @@ func TestSponsorshipOutlivesTheSigningWindow(t *testing.T) {
 	}
 }
 
+// fakeAssistant records the question and grounding it was actually called
+// with, so a test can assert the service builds grounding text from real
+// balances/activity rather than trusting internal/assistant's own (already
+// tested against a live account) behaviour.
+type fakeAssistant struct {
+	gotQuestion, gotGrounding string
+	answer                    string
+	err                       error
+}
+
+func (f *fakeAssistant) Ask(_ context.Context, question, grounding string) (string, error) {
+	f.gotQuestion, f.gotGrounding = question, grounding
+	return f.answer, f.err
+}
+
+func TestAssistUnavailableWithoutAConfiguredAssistant(t *testing.T) {
+	r := newRig(t)
+	if _, err := r.svc.Assist(context.Background(), testAccount, "why did my trade fail?"); errCode(err) != "assistant_unavailable" {
+		t.Fatalf("got %v, want assistant_unavailable", err)
+	}
+}
+
+func TestAssistRefusesAnEmptyQuestion(t *testing.T) {
+	r := newRig(t)
+	r.svc.d.Assistant = &fakeAssistant{answer: "unused"}
+	if _, err := r.svc.Assist(context.Background(), testAccount, "   "); errCode(err) != "empty_question" {
+		t.Fatalf("got %v, want empty_question", err)
+	}
+}
+
+func TestAssistGroundsTheQuestionInRealBalances(t *testing.T) {
+	r := newRig(t)
+	fa := &fakeAssistant{answer: "You hold 50 TST."}
+	r.svc.d.Assistant = fa
+	r.markets.markets = []store.Market{nativeMarket()}
+	r.chain.set(func(f *fakeChain) { f.balance = big.NewInt(50_000_000) }) // 50 TST @ 6dp
+
+	view, err := r.svc.Assist(context.Background(), testAccount, "how much do I hold?")
+	if err != nil {
+		t.Fatalf("Assist: %v", err)
+	}
+	if view.Answer != "You hold 50 TST." {
+		t.Errorf("answer = %q, want the assistant's own text passed through unchanged", view.Answer)
+	}
+	if fa.gotQuestion != "how much do I hold?" {
+		t.Errorf("question = %q", fa.gotQuestion)
+	}
+	if !strings.Contains(fa.gotGrounding, "50") || !strings.Contains(fa.gotGrounding, "TST") {
+		t.Errorf("grounding = %q, want it to mention the real 50 TST balance", fa.gotGrounding)
+	}
+}
+
 func TestParseAmount(t *testing.T) {
 	for _, bad := range []string{"", "0", "000", "-1", "+1", "1.5", "1e6", " 1", "1 ", "0x10", strings.Repeat("9", 79)} {
 		if _, ok := parseAmount(bad); ok {

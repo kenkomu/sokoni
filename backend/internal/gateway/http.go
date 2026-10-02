@@ -31,6 +31,7 @@ const maxBody = 64 << 10
 //	POST /v1/mera/ops/{id}/submit          return the signed ECDSA signature
 //	GET  /v1/accounts/{address}/balances   every sponsored token's balanceOf, read live
 //	GET  /v1/accounts/{address}/activity   recent account operations and status
+//	POST /v1/accounts/{address}/assistant  ask the support assistant, grounded in this account's own data
 //	GET  /v1/markets                       enabled markets
 //	GET  /v1/markets/{symbol}/candles      candle history (interval query param, seconds)
 //	GET  /v1/markets/{symbol}/trades       recent market-wide trades (limit query param)
@@ -59,6 +60,7 @@ func NewHandler(svc *Service, hub *Hub, log *slog.Logger) http.Handler {
 	mux.HandleFunc("POST /v1/mera/ops/{id}/submit", h.submitMera)
 	mux.HandleFunc("GET /v1/accounts/{address}/balances", h.balances)
 	mux.HandleFunc("GET /v1/accounts/{address}/activity", h.activity)
+	mux.HandleFunc("POST /v1/accounts/{address}/assistant", h.assistant)
 	mux.HandleFunc("GET /v1/markets", h.markets)
 	mux.HandleFunc("GET /v1/markets/{symbol}/candles", h.candles)
 	mux.HandleFunc("GET /v1/markets/{symbol}/trades", h.trades)
@@ -267,6 +269,22 @@ func (h *handler) activity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view, err := h.svc.AccountActivity(r.Context(), common.HexToAddress(addr), limit)
+	h.respond(w, http.StatusOK, view, err)
+}
+
+func (h *handler) assistant(w http.ResponseWriter, r *http.Request) {
+	addr := r.PathValue("address")
+	if !common.IsHexAddress(addr) {
+		h.fail(w, fail(KindInvalid, "bad_address", "address must be a 0x address", nil))
+		return
+	}
+	var body struct {
+		Question string `json:"question"`
+	}
+	if !h.decode(w, r, &body) {
+		return
+	}
+	view, err := h.svc.Assist(r.Context(), common.HexToAddress(addr), body.Question)
 	h.respond(w, http.StatusOK, view, err)
 }
 

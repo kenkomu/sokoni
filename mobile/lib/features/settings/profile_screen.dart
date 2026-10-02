@@ -7,6 +7,7 @@ import '../../data/mera/mera_key_service.dart';
 import '../../data/signer.dart';
 import '../../data/wallet_connect/wallet_connect_signer.dart';
 import '../../design/format.dart';
+import 'assistant_sheet.dart';
 
 /// Account identity and device settings. Security used to hardcode
 /// "Passkey" here regardless of how the account actually signs — true for
@@ -110,7 +111,13 @@ class ProfileScreen extends StatelessWidget {
             _MenuTile(
               icon: Icons.help_outline,
               label: 'Help and Support',
-              onTap: null,
+              subtitle: 'Ask about your account or a trade',
+              onTap:
+                  () => showAssistantSheet(
+                    context,
+                    config: config,
+                    account: account,
+                  ),
             ),
             const SizedBox(height: 8),
             const Divider(),

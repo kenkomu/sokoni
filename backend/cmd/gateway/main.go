@@ -24,6 +24,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 
+	"github.com/kenkomu/sokoni/backend/internal/assistant"
 	"github.com/kenkomu/sokoni/backend/internal/bundler"
 	"github.com/kenkomu/sokoni/backend/internal/chain"
 	"github.com/kenkomu/sokoni/backend/internal/gateway"
@@ -250,6 +251,7 @@ func run(log *slog.Logger) error {
 		Ops:          ops,
 		Markets:      markets,
 		Activity:     db,
+		Assistant:    openAssistant(log),
 		Log:          log,
 	})
 
@@ -286,6 +288,21 @@ func run(log *slog.Logger) error {
 		}
 		return err
 	}
+}
+
+// openAssistant returns nil (a genuine nil interface, not a typed nil
+// pointer boxed into one — see gateway.Assistant's own doc on the
+// left-nil-to-degrade convention this follows) when ANTHROPIC_API_KEY is
+// unset, so /v1/accounts/{address}/assistant answers KindUpstream rather
+// than the gateway refusing to start over a feature most of a hackathon
+// build never needed configured.
+func openAssistant(log *slog.Logger) gateway.Assistant {
+	key := os.Getenv("ANTHROPIC_API_KEY")
+	if key == "" {
+		log.Warn("ANTHROPIC_API_KEY not set; the support assistant is unavailable")
+		return nil
+	}
+	return assistant.New(key, env("ANTHROPIC_MODEL", "claude-sonnet-5"))
 }
 
 // openOps uses Redis when REDIS_URL is set, and memory otherwise. Memory is

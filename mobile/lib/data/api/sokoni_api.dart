@@ -53,6 +53,19 @@ class SokoniApi {
     ];
   }
 
+  /// Ask the in-app support assistant one question, grounded server-side in
+  /// this account's real balances and recent activity (internal/assistant) —
+  /// the phone sends only the question text, never the grounding data
+  /// itself, since the gateway already has it and building it here would
+  /// just be a second, driftable copy of Portfolio's own reads.
+  Future<String> assist(String address, String question) async {
+    final j = await _post(
+      '/v1/accounts/${Uri.encodeComponent(address)}/assistant',
+      {'question': question},
+    );
+    return j['answer'] as String? ?? '';
+  }
+
   /// Learn the account this passkey owns. The address is counterfactual:
   /// known, and able to receive funds, before anything has been deployed.
   Future<AccountInfo> registerAccount({
