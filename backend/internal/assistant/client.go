@@ -18,6 +18,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/anthropics/anthropic-sdk-go/vertex"
 )
 
 const systemPrompt = `You are Sokoni's in-app support assistant. Sokoni is a passkey-native mobile trading app on Monad: users sign transactions with their device's biometric (Face ID / fingerprint) or a connected external wallet, never a seed phrase, and Sokoni's paymaster sponsors gas so an account never needs to hold MON to trade.
@@ -43,6 +44,24 @@ type Client struct {
 func New(apiKey, model string) *Client {
 	return &Client{
 		api:   anthropic.NewClient(option.WithAPIKey(apiKey)),
+		model: model,
+	}
+}
+
+// NewVertex authenticates through a GCP project's Vertex AI instead of a
+// direct Anthropic API key — the free-trial-credit path (Vertex gives new
+// GCP projects $300 over 90 days; the direct API's own signup credit is
+// unconfirmed as of this writing). Auth is ADC (Application Default
+// Credentials): on a VPS that means GOOGLE_APPLICATION_CREDENTIALS pointing
+// at a service account key file, the standard chain anthropic-sdk-go's
+// vertex.WithGoogleAuth resolves on its own — nothing Sokoni-specific to
+// configure beyond the file existing.
+//
+// model is still a bare id like "claude-sonnet-5": current-generation
+// models take no Vertex prefix or @-version suffix, unlike a dated snapshot.
+func NewVertex(ctx context.Context, projectID, region, model string) *Client {
+	return &Client{
+		api:   anthropic.NewClient(vertex.WithGoogleAuth(ctx, region, projectID)),
 		model: model,
 	}
 }

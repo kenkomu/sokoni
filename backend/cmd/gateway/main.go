@@ -251,7 +251,7 @@ func run(log *slog.Logger) error {
 		Ops:          ops,
 		Markets:      markets,
 		Activity:     db,
-		Assistant:    openAssistant(log),
+		Assistant:    openAssistant(ctx, log),
 		Log:          log,
 	})
 
@@ -292,17 +292,28 @@ func run(log *slog.Logger) error {
 
 // openAssistant returns nil (a genuine nil interface, not a typed nil
 // pointer boxed into one — see gateway.Assistant's own doc on the
-// left-nil-to-degrade convention this follows) when ANTHROPIC_API_KEY is
-// unset, so /v1/accounts/{address}/assistant answers KindUpstream rather
-// than the gateway refusing to start over a feature most of a hackathon
-// build never needed configured.
-func openAssistant(log *slog.Logger) gateway.Assistant {
+// left-nil-to-degrade convention this follows) when neither auth path is
+// configured, so /v1/accounts/{address}/assistant answers KindUpstream
+// rather than the gateway refusing to start over a feature most of a
+// hackathon build never needed configured.
+//
+// GOOGLE_CLOUD_PROJECT takes priority over ANTHROPIC_API_KEY when both are
+// set: Vertex is the free-trial-credit path (see assistant.NewVertex's own
+// doc), so once a GCP project is configured there is no reason to spend the
+// direct API key's balance instead.
+func openAssistant(ctx context.Context, log *slog.Logger) gateway.Assistant {
+	model := env("ANTHROPIC_MODEL", "claude-sonnet-5")
+	if project := os.Getenv("GOOGLE_CLOUD_PROJECT"); project != "" {
+		region := env("GOOGLE_CLOUD_REGION", "global")
+		log.Info("support assistant via Vertex AI", "project", project, "region", region, "model", model)
+		return assistant.NewVertex(ctx, project, region, model)
+	}
 	key := os.Getenv("ANTHROPIC_API_KEY")
 	if key == "" {
-		log.Warn("ANTHROPIC_API_KEY not set; the support assistant is unavailable")
+		log.Warn("neither GOOGLE_CLOUD_PROJECT nor ANTHROPIC_API_KEY is set; the support assistant is unavailable")
 		return nil
 	}
-	return assistant.New(key, env("ANTHROPIC_MODEL", "claude-sonnet-5"))
+	return assistant.New(key, model)
 }
 
 // openOps uses Redis when REDIS_URL is set, and memory otherwise. Memory is
