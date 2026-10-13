@@ -51,16 +51,23 @@ func NewHandler(svc *Service, hub *Hub, log *slog.Logger) http.Handler {
 	})
 	mux.HandleFunc("GET /.well-known/assetlinks.json", h.assetLinks)
 	mux.HandleFunc("GET /v1/config", h.config)
-	mux.HandleFunc("POST /v1/accounts", h.register)
-	mux.HandleFunc("POST /v1/ops", h.prepare)
-	mux.HandleFunc("POST /v1/ops/{id}/submit", h.submit)
+	// A trade is two sponsored calls (prepare, then submit), so 20/min with a
+	// burst of 10 lets a person trade as fast as they can tap while capping
+	// what one IP can make the paymaster spend. The assistant is tighter:
+	// each question can be several model round trips.
+	sponsored := newIPLimiter(20, 10)
+	assistant := newIPLimiter(6, 3)
+
+	mux.HandleFunc("POST /v1/accounts", sponsored.wrap(h.register))
+	mux.HandleFunc("POST /v1/ops", sponsored.wrap(h.prepare))
+	mux.HandleFunc("POST /v1/ops/{id}/submit", sponsored.wrap(h.submit))
 	mux.HandleFunc("GET /v1/ops/{id}", h.status)
-	mux.HandleFunc("POST /v1/mera/accounts", h.registerMera)
-	mux.HandleFunc("POST /v1/mera/ops", h.prepareMera)
-	mux.HandleFunc("POST /v1/mera/ops/{id}/submit", h.submitMera)
+	mux.HandleFunc("POST /v1/mera/accounts", sponsored.wrap(h.registerMera))
+	mux.HandleFunc("POST /v1/mera/ops", sponsored.wrap(h.prepareMera))
+	mux.HandleFunc("POST /v1/mera/ops/{id}/submit", sponsored.wrap(h.submitMera))
 	mux.HandleFunc("GET /v1/accounts/{address}/balances", h.balances)
 	mux.HandleFunc("GET /v1/accounts/{address}/activity", h.activity)
-	mux.HandleFunc("POST /v1/accounts/{address}/assistant", h.assistant)
+	mux.HandleFunc("POST /v1/accounts/{address}/assistant", assistant.wrap(h.assistant))
 	mux.HandleFunc("GET /v1/markets", h.markets)
 	mux.HandleFunc("GET /v1/markets/{symbol}/candles", h.candles)
 	mux.HandleFunc("GET /v1/markets/{symbol}/trades", h.trades)
