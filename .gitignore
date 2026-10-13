@@ -22,3 +22,6 @@ contracts/broadcast/
 !.env.example
 *.log
 
+
+# Release binaries are published as GitHub Releases, not committed.
+releases/*.apk

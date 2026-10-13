@@ -5,6 +5,7 @@ import '../../core/config.dart';
 import '../../data/api/sokoni_api.dart';
 import '../../design/app_shell.dart';
 import '../../design/theme.dart';
+import 'mera_sheet.dart';
 import 'onboarding_screen.dart';
 import 'wallet_connect_sheet.dart';
 
@@ -18,19 +19,23 @@ const _previewAccount = AccountInfo(
 );
 
 /// The app's first screen — copy and layout match Screen 1 of the "Crypto
-/// Trading App Design" Figma community file. One entry point: connecting an
-/// external wallet ([showWalletConnectSheet]), which signs through the same
-/// [MeraController]/gateway flow the on-device Mera key used
-/// ([WalletConnectSigner] vs. [LocalKeySigner] — see data/signer.dart).
-/// [showPasskeySheet]'s WebAuthn path is still wired up and tested, but
-/// stays unreachable from this screen: `SOKONI_RP_ID` now points at
-/// `sokoni.bitshada.com`, which does serve a Digital Asset Links file
-/// (`GET /.well-known/assetlinks.json` on the gateway itself), but no
-/// physical device has ever completed a passkey ceremony against it —
-/// that's what the `[kDebugMode]`-only spike button lower on this screen is
-/// for. Swap the primary button to it once that's proven. The `passkeys`
-/// plugin this app pins (2.22.3) also exposes no PRF extension to back
-/// Mera's real vault scheme — see mera_key_service.dart.
+/// Trading App Design" Figma community file. Two real entry points, both
+/// going through the same [MeraController]/gateway flow with only the
+/// signer type differing ([WalletConnectSigner] vs. [LocalKeySigner] — see
+/// data/signer.dart): [showWalletConnectSheet] for someone who already has
+/// a wallet, [showMeraSheet] for someone who doesn't — a key generated and
+/// held on this device, no external app required, no seed phrase to write
+/// down. Before this, a visitor with no wallet app installed had no way
+/// into the app at all.
+///
+/// [showPasskeySheet]'s WebAuthn path is wired up and tested too, but stays
+/// behind the `[kDebugMode]`-only spike button lower on this screen: no
+/// physical device has ever completed a passkey ceremony against a live
+/// `sokoni.bitshada.com` assetlinks.json yet, unlike the Mera path above,
+/// which this session's own trades have already proven live on mainnet.
+/// Promote it once that's confirmed. The `passkeys` plugin this app pins
+/// (2.22.3) also exposes no PRF extension to back Mera's real vault scheme
+/// — see mera_key_service.dart.
 class WelcomeScreen extends StatefulWidget {
   const WelcomeScreen({
     required this.config,
@@ -92,7 +97,9 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        'Discover the potential of digital assets',
+                        'Trade BTC, ETH, MON and gold against USDC — '
+                        'sign with your fingerprint or a wallet, no seed '
+                        'phrase, and gas is on us.',
                         style: theme.textTheme.bodyLarge?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
@@ -108,38 +115,58 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                             () => showWalletConnectSheet(context, config),
                       ),
                       const SizedBox(height: 12),
+                      // The real no-wallet path: a key generated and held on
+                      // this device, same production gateway flow the
+                      // wallet-connect button above uses — see this file's
+                      // own doc for why this is the Mera sheet and not the
+                      // still-unproven WebAuthn one.
+                      _OutlinePillButton(
+                        label: "I don't have a wallet",
+                        onPressed: () => showMeraSheet(context, config),
+                      ),
+                      const SizedBox(height: 12),
                       if (kDebugMode) ...[
-                        // SPIKE, remove once the passkey path has a real
-                        // button: proving one real device can complete a
+                        // SPIKE: proving one real device can complete a
                         // WebAuthn ceremony against a live assetlinks.json
-                        // is the one open unknown gating the "Create a
-                        // wallet" option — see docs/adr and CLAUDE.md's
+                        // is the one open unknown gating promoting this to
+                        // a real button — see docs/adr and CLAUDE.md's
                         // Known gaps.
                         _OutlinePillButton(
-                          label: 'Create a wallet',
+                          label: 'Create a wallet (passkey spike)',
                           onPressed: () => showPasskeySheet(context, config),
                         ),
                         const SizedBox(height: 12),
                       ],
                       const SizedBox(height: 4),
-                      Center(
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
+                      // Row + Flexible, not Center + mainAxisSize.min: the
+                      // longer copy needed for two onboarding paths no
+                      // longer fits one line at every text scale, and a
+                      // fixed-width Row just clips past the screen edge
+                      // instead of wrapping (caught on-device, not in a
+                      // simulator at default text scale).
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Icon(
                               Icons.lock_outline,
                               size: 14,
                               color: theme.colorScheme.onSurfaceVariant,
                             ),
-                            const SizedBox(width: 6),
-                            Text(
-                              'Your keys stay in your wallet app',
+                          ),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Text(
+                              'Your keys never leave your device or wallet app',
+                              textAlign: TextAlign.center,
                               style: theme.textTheme.bodySmall?.copyWith(
                                 color: theme.colorScheme.onSurfaceVariant,
                               ),
                             ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 28),
                       const _WalletSupportRow(),
