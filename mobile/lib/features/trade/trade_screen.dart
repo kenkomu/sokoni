@@ -102,7 +102,25 @@ class _TradeScreenState extends State<TradeScreen> {
           children: [
             TokenAvatar(symbol: market.baseSymbol, size: 28),
             const SizedBox(width: 10),
-            Text(market.symbol),
+            Flexible(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    market.baseName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  Text(
+                    market.symbol,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
         actions: [

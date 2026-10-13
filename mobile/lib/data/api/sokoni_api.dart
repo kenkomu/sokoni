@@ -578,6 +578,20 @@ class MarketInfo {
   /// "MON" out of "MON-AUSD" — for display, where [baseToken] (a contract
   /// address) would be meaningless.
   String get baseSymbol => symbol.split('-').first;
+
+  /// What the base asset actually is, in words — "XAUt0" means nothing to
+  /// someone who hasn't met Tether Gold's on-chain ticker. Falls back to the
+  /// ticker for any market added without a name here.
+  String get baseName => _assetNames[baseSymbol] ?? baseSymbol;
+
+  static const _assetNames = {
+    'BTC': 'Bitcoin',
+    'ETH': 'Ethereum',
+    'MON': 'Monad',
+    'XAUt0': 'Tether Gold',
+    'AUSD': 'Agora Dollar',
+    'USDC': 'USD Coin',
+  };
 }
 
 class Candle {

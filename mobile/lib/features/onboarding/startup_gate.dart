@@ -69,7 +69,11 @@ class _StartupGateState extends State<StartupGate> {
       return;
     }
     try {
-      final client = await WalletConnectService.createClient(widget.config);
+      // Without a bound, a slow or unreachable relay left the launch spinner
+      // up forever with no way out but clearing app data.
+      final client = await WalletConnectService.createClient(
+        widget.config,
+      ).timeout(const Duration(seconds: 8));
       final session = WalletConnectService.findExisting(client, widget.config);
       if (session == null) {
         // Expired or revoked from the wallet's side since last launch.

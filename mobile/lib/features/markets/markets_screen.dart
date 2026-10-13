@@ -310,14 +310,20 @@ class _MarketRow extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // One line each, always: a symbol long enough to wrap
+                    // (XAUt0-USDC) made its row taller than every other.
                     Text(
-                      market.symbol,
+                      market.baseName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.w600,
                       ),
                     ),
                     Text(
-                      market.baseSymbol,
+                      market.symbol,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
