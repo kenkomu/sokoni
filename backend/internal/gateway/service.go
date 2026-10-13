@@ -19,6 +19,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -78,8 +79,58 @@ type ActivityData interface {
 // internal/assistant's own doc for why grounding, not open chat. Left nil
 // (no ANTHROPIC_API_KEY configured) the same way Markets/MeraAccounts are:
 // Assist answers KindUpstream rather than the gateway refusing to start.
+//
+// tools lets the model fetch beyond what's pre-assembled in grounding (e.g.
+// a market's live price, or more activity than the 10 rows grounding
+// includes) — internal/assistant.Client runs the actual tool-use loop
+// against the Anthropic API; this package only defines what a tool is and
+// does, so internal/assistant can depend on these types without gateway
+// depending back on internal/assistant (ADR-free: just the same structural
+// "satisfies this interface" shape as MarketData/ActivityData above).
 type Assistant interface {
-	Ask(ctx context.Context, question, grounding string) (string, error)
+	Ask(ctx context.Context, question, grounding string, tools []Tool) (Answer, error)
+}
+
+// Tool is one function the assistant may call mid-answer. Properties and
+// Required describe its input as a JSON Schema object (never a float in
+// Required's absence of types — this is just shape, not validation; the
+// model is trusted to send well-formed input because Run only ever reads
+// data it already has access to on this account's behalf, nothing it could
+// not have answered by hand).
+type Tool struct {
+	Name        string
+	Description string
+	Properties  map[string]any
+	Required    []string
+	Run         func(ctx context.Context, input json.RawMessage) (ToolResult, error)
+}
+
+// ToolResult is what a Tool call returns: Text goes back to the model so it
+// can keep reasoning, Display (optional) goes to the phone so it can render
+// a real widget instead of the model restating the data in prose — the
+// "pushAndForget" half of a display-stack pattern. There is no
+// "pushAndWait" counterpart here: a tool that needed to suspend for a user
+// decision (e.g. confirm a trade) would need a stateful round trip the
+// chat endpoint doesn't have, which is a larger piece than this answers.
+type ToolResult struct {
+	Text    string
+	Display *DisplayPart
+}
+
+// DisplayPart is a typed, renderable card the phone's chat UI knows how to
+// draw (see mobile/lib/features/settings/assistant_sheet.dart) — Data's
+// shape is whatever Type says it is, by convention between this file's
+// tools and that widget's switch, not a schema either side validates.
+type DisplayPart struct {
+	Type string         `json:"type"`
+	Data map[string]any `json:"data"`
+}
+
+// Answer is internal/assistant.Client.Ask's result: the model's final text,
+// plus every Display a tool call produced along the way, in call order.
+type Answer struct {
+	Text     string
+	Displays []DisplayPart
 }
 
 // Token is an ERC-20 the paymaster will sponsor transfers of.
@@ -1378,7 +1429,8 @@ func (s *Service) AccountActivity(ctx context.Context, address common.Address, l
 }
 
 type AssistView struct {
-	Answer string `json:"answer"`
+	Answer   string        `json:"answer"`
+	Displays []DisplayPart `json:"displays,omitempty"`
 }
 
 // Assist answers one question about the account, grounded in its real
@@ -1425,11 +1477,128 @@ func (s *Service) Assist(ctx context.Context, address common.Address, question s
 		}
 	}
 
-	answer, err := s.d.Assistant.Ask(ctx, question, b.String())
+	answer, err := s.d.Assistant.Ask(ctx, question, b.String(), s.assistTools(address))
 	if err != nil {
 		return nil, fail(KindUpstream, "assistant", "could not reach the assistant", err)
 	}
-	return &AssistView{Answer: answer}, nil
+	return &AssistView{Answer: answer.Text, Displays: answer.Displays}, nil
+}
+
+// assistTools are the only things the assistant can reach beyond grounding:
+// each is read-only and scoped to this one account, so there is nothing a
+// question could trick the model into doing that it couldn't already see
+// from the account's own data. show_market_quote is the one case grounding
+// never covers (a live price is not part of "this account's balances and
+// activity"), which is why it exists; the other two let the model ask for
+// more than grounding's fixed 10-row activity slice or restate balances as
+// a card instead of prose.
+func (s *Service) assistTools(address common.Address) []Tool {
+	return []Tool{
+		{
+			Name:        "show_balances",
+			Description: "Show the user's current token balances as a card in the chat, instead of just describing them in text. Call this whenever the user asks what they hold or how much they have.",
+			Properties:  map[string]any{},
+			Run: func(ctx context.Context, _ json.RawMessage) (ToolResult, error) {
+				balances, err := s.Balances(ctx, address)
+				if err != nil {
+					return ToolResult{Text: "could not read balances right now"}, nil
+				}
+				items := make([]map[string]any, 0, len(balances.Balances))
+				var b strings.Builder
+				if len(balances.Balances) == 0 {
+					b.WriteString("No balances held.")
+				}
+				for _, bal := range balances.Balances {
+					fmt.Fprintf(&b, "%s %s\n", bal.Amount, bal.Token.Symbol)
+					items = append(items, map[string]any{"symbol": bal.Token.Symbol, "amount": bal.Amount})
+				}
+				return ToolResult{
+					Text:    b.String(),
+					Display: &DisplayPart{Type: "balances_card", Data: map[string]any{"balances": items}},
+				}, nil
+			},
+		},
+		{
+			Name:        "show_recent_activity",
+			Description: "Show the user's recent trades and transfers as a card in the chat. Call this when the user asks about a past trade, transfer, or why something failed, and the activity already given to you doesn't cover it.",
+			Properties: map[string]any{
+				"limit": map[string]any{
+					"type":        "integer",
+					"description": "How many recent activity rows to show, most recent first. Defaults to 10.",
+				},
+			},
+			Run: func(ctx context.Context, input json.RawMessage) (ToolResult, error) {
+				if s.d.Activity == nil {
+					return ToolResult{Text: "activity history is unavailable right now"}, nil
+				}
+				var args struct {
+					Limit int `json:"limit"`
+				}
+				_ = json.Unmarshal(input, &args)
+				limit := args.Limit
+				if limit <= 0 || limit > maxLimit {
+					limit = defaultLimit
+				}
+				rows, err := s.d.Activity.ListActivity(ctx, address.Bytes(), limit)
+				if err != nil {
+					return ToolResult{Text: "could not read activity right now"}, nil
+				}
+				items := make([]map[string]any, 0, len(rows))
+				var b strings.Builder
+				if len(rows) == 0 {
+					b.WriteString("No activity yet.")
+				}
+				for _, a := range rows {
+					fmt.Fprintf(&b, "%s %s %s: %s", a.CreatedAt.Format(time.RFC3339), a.Kind, a.Market, a.Status)
+					if a.Reason != "" {
+						fmt.Fprintf(&b, " (%s)", a.Reason)
+					}
+					b.WriteString("\n")
+					items = append(items, map[string]any{
+						"opId": a.OpID, "kind": a.Kind, "market": a.Market,
+						"status": a.Status, "reason": a.Reason, "createdAt": a.CreatedAt,
+					})
+				}
+				return ToolResult{
+					Text:    b.String(),
+					Display: &DisplayPart{Type: "activity_card", Data: map[string]any{"activity": items}},
+				}, nil
+			},
+		},
+		{
+			Name:        "show_market_quote",
+			Description: "Show a market's most recent trade price as a card in the chat. Call this whenever the user asks what something costs or its current price — grounding never includes live prices.",
+			Properties: map[string]any{
+				"symbol": map[string]any{
+					"type":        "string",
+					"description": "The market symbol, e.g. BTC-USDC.",
+				},
+			},
+			Required: []string{"symbol"},
+			Run: func(ctx context.Context, input json.RawMessage) (ToolResult, error) {
+				var args struct {
+					Symbol string `json:"symbol"`
+				}
+				if err := json.Unmarshal(input, &args); err != nil || args.Symbol == "" {
+					return ToolResult{Text: "a market symbol is required"}, nil
+				}
+				trades, err := s.RecentTrades(ctx, args.Symbol, 1)
+				if err != nil {
+					return ToolResult{Text: fmt.Sprintf("no market found for %q", args.Symbol)}, nil
+				}
+				if len(trades.Trades) == 0 {
+					return ToolResult{Text: fmt.Sprintf("no trades yet for %s", args.Symbol)}, nil
+				}
+				last := trades.Trades[0]
+				return ToolResult{
+					Text: fmt.Sprintf("%s last traded at %s (qty %s)", args.Symbol, last.Px, last.Qty),
+					Display: &DisplayPart{Type: "market_card", Data: map[string]any{
+						"symbol": args.Symbol, "price": last.Px, "qty": last.Qty,
+					}},
+				}, nil
+			},
+		},
+	}
 }
 
 // ------------------------------------------------------------------ chain reads

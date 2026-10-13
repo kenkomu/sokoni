@@ -58,12 +58,17 @@ class SokoniApi {
   /// the phone sends only the question text, never the grounding data
   /// itself, since the gateway already has it and building it here would
   /// just be a second, driftable copy of Portfolio's own reads.
-  Future<String> assist(String address, String question) async {
+  ///
+  /// The answer may carry [AssistAnswer.displays] alongside its text: cards
+  /// a tool call produced (a balance, an activity list, a market quote) for
+  /// the chat UI to render as a widget instead of the model restating the
+  /// same data in prose.
+  Future<AssistAnswer> assist(String address, String question) async {
     final j = await _post(
       '/v1/accounts/${Uri.encodeComponent(address)}/assistant',
       {'question': question},
     );
-    return j['answer'] as String? ?? '';
+    return AssistAnswer.fromJson(j);
   }
 
   /// Learn the account this passkey owns. The address is counterfactual:
@@ -354,6 +359,42 @@ class AccountBalances {
 
   final String address;
   final List<AccountBalance> balances;
+}
+
+/// One answer from the "Help and Support" assistant (internal/assistant on
+/// the backend). [displays] is whatever tool calls produced along the way —
+/// see backend/internal/gateway's DisplayPart doc for the fire-and-forget
+/// ("pushAndForget") shape this follows: the gateway decides what cards
+/// exist, this is just the wire shape they arrive in.
+class AssistAnswer {
+  const AssistAnswer({required this.text, required this.displays});
+
+  factory AssistAnswer.fromJson(Map<String, dynamic> j) => AssistAnswer(
+    text: _str(j, 'answer'),
+    displays: [
+      for (final d in (j['displays'] as List? ?? const []))
+        AssistDisplay.fromJson(d as Map<String, dynamic>),
+    ],
+  );
+
+  final String text;
+  final List<AssistDisplay> displays;
+}
+
+/// One typed card from an assistant answer. [type] picks the widget
+/// (assistant_sheet.dart's switch); [data] is that widget's own shape, by
+/// convention with the backend tool that produced it, not a schema either
+/// side validates.
+class AssistDisplay {
+  const AssistDisplay({required this.type, required this.data});
+
+  factory AssistDisplay.fromJson(Map<String, dynamic> j) => AssistDisplay(
+    type: _str(j, 'type'),
+    data: (j['data'] as Map<String, dynamic>?) ?? const {},
+  );
+
+  final String type;
+  final Map<String, dynamic> data;
 }
 
 class GatewayConfig {

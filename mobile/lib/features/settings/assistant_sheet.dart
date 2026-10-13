@@ -29,10 +29,12 @@ class _Message {
     required this.text,
     required this.fromUser,
     this.isError = false,
+    this.displays = const [],
   });
   final String text;
   final bool fromUser;
   final bool isError;
+  final List<AssistDisplay> displays;
 }
 
 class _AssistantSheet extends StatefulWidget {
@@ -70,7 +72,15 @@ class _AssistantSheetState extends State<_AssistantSheet> {
     try {
       final answer = await _api.assist(widget.address, question);
       if (!mounted) return;
-      setState(() => _messages.add(_Message(text: answer, fromUser: false)));
+      setState(
+        () => _messages.add(
+          _Message(
+            text: answer.text,
+            fromUser: false,
+            displays: answer.displays,
+          ),
+        ),
+      );
     } catch (e) {
       if (!mounted) return;
       setState(
@@ -193,6 +203,7 @@ class _EmptyState extends StatelessWidget {
     'What is a passkey and why don\'t I need a seed phrase?',
     'Why did my last trade fail or expire?',
     'What tokens do I currently hold?',
+    'What is the current price of BTC-USDC?',
   ];
 
   @override
@@ -261,10 +272,194 @@ class _Bubble extends StatelessWidget {
           color: bg,
           borderRadius: BorderRadius.circular(16),
         ),
-        child: Text(
-          message.text,
-          style: theme.textTheme.bodyMedium?.copyWith(color: fg),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (message.text.isNotEmpty)
+              Text(
+                message.text,
+                style: theme.textTheme.bodyMedium?.copyWith(color: fg),
+              ),
+            for (final d in message.displays)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: _DisplayCard(display: d),
+              ),
+          ],
         ),
+      ),
+    );
+  }
+}
+
+/// Renders one [AssistDisplay] — a tool-produced card, the "pushAndForget"
+/// half of a display-stack pattern (see backend/internal/gateway's
+/// DisplayPart doc). The switch on [AssistDisplay.type] is the whole
+/// contract with the backend tools that produce these; an unrecognised type
+/// (an older build talking to a newer backend, or vice versa) renders
+/// nothing rather than crashing the chat.
+class _DisplayCard extends StatelessWidget {
+  const _DisplayCard({required this.display});
+  final AssistDisplay display;
+
+  @override
+  Widget build(BuildContext context) {
+    switch (display.type) {
+      case 'balances_card':
+        return _BalancesCard(data: display.data);
+      case 'activity_card':
+        return _ActivityCard(data: display.data);
+      case 'market_card':
+        return _MarketCard(data: display.data);
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+}
+
+class _Card extends StatelessWidget {
+  const _Card({required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+      ),
+      child: child,
+    );
+  }
+}
+
+class _BalancesCard extends StatelessWidget {
+  const _BalancesCard({required this.data});
+  final Map<String, dynamic> data;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final balances = (data['balances'] as List? ?? const []);
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'Balances',
+            style: theme.textTheme.labelLarge?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          if (balances.isEmpty)
+            Text(
+              'None held.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          for (final b in balances.cast<Map<String, dynamic>>())
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('${b['symbol']}', style: theme.textTheme.bodyMedium),
+                  Text(
+                    '${b['amount']}',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ActivityCard extends StatelessWidget {
+  const _ActivityCard({required this.data});
+  final Map<String, dynamic> data;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final rows = (data['activity'] as List? ?? const []);
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'Recent activity',
+            style: theme.textTheme.labelLarge?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          if (rows.isEmpty)
+            Text(
+              'Nothing yet.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          for (final a in rows.cast<Map<String, dynamic>>())
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${a['kind']} ${a['market'] ?? ''}'.trim(),
+                      style: theme.textTheme.bodySmall,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  Text('${a['status']}', style: theme.textTheme.bodySmall),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MarketCard extends StatelessWidget {
+  const _MarketCard({required this.data});
+  final Map<String, dynamic> data;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return _Card(
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            '${data['symbol']}',
+            style: theme.textTheme.labelLarge?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          Text(
+            '${data['price']}',
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
       ),
     );
   }

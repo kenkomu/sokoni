@@ -194,7 +194,41 @@ void main() {
 
       final body = gw.lastBody('POST', '/v1/accounts/0xACC7/assistant');
       expect(body['question'], 'why did my trade fail?');
-      expect(answer, 'Your last trade expired — no funds moved.');
+      expect(answer.text, 'Your last trade expired — no funds moved.');
+      expect(answer.displays, isEmpty);
+    });
+
+    test('carries any display cards a tool call produced', () async {
+      final gw =
+          FakeGateway()..on(
+            'POST',
+            '/v1/accounts/0xACC7/assistant',
+            (_) => (
+              status: 200,
+              body: {
+                'answer': 'You hold 50 TST.',
+                'displays': [
+                  {
+                    'type': 'balances_card',
+                    'data': {
+                      'balances': [
+                        {'symbol': 'TST', 'amount': '50000000'},
+                      ],
+                    },
+                  },
+                ],
+              },
+            ),
+          );
+
+      final answer = await gw.api().assist('0xACC7', 'what do I hold?');
+
+      expect(answer.displays, hasLength(1));
+      expect(answer.displays.single.type, 'balances_card');
+      expect(
+        answer.displays.single.data['balances'],
+        isA<List>().having((b) => b, 'balances', hasLength(1)),
+      );
     });
   });
 

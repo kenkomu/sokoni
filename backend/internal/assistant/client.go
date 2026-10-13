@@ -10,15 +10,27 @@
 // knowledge, never to invent a balance, a transaction, or a reason a trade
 // failed — the one thing worse than "Help and Support" doing nothing is it
 // confidently making something up.
+//
+// Grounding has a fixed shape, though — this account's balances and its
+// last 10 activity rows, decided before the question is even read — so it
+// can't answer "what's the price of BTC-USDC right now" or "show me more
+// than 10". gateway.Service.assistTools hands Ask a short list of
+// read-only tools for exactly that gap; Ask runs the resulting tool-use
+// loop itself (see maxToolRounds), since the Go SDK's own ToolRunner is
+// Beta-only and this stays on the stable Messages API.
 package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/anthropics/anthropic-sdk-go/packages/param"
 	"github.com/anthropics/anthropic-sdk-go/vertex"
+
+	"github.com/kenkomu/sokoni/backend/internal/gateway"
 )
 
 const systemPrompt = `You are Sokoni's in-app support assistant. Sokoni is a passkey-native mobile trading app on Monad: users sign transactions with their device's biometric (Face ID / fingerprint) or a connected external wallet, never a seed phrase, and Sokoni's paymaster sponsors gas so an account never needs to hold MON to trade.
@@ -66,27 +78,92 @@ func NewVertex(ctx context.Context, projectID, region, model string) *Client {
 	}
 }
 
+// maxToolRounds bounds the tool-use loop in Ask. Each of the three tools
+// gateway.Service.assistTools hands in is one read against this account's
+// own data, so a genuine question never needs more than one or two; this is
+// headroom against the model double-checking, not a budget it's expected to
+// spend fully. The SDK's own ToolRunner (tools.md) only exists on the Beta
+// surface, so this loop is hand-rolled over the stable Messages API.
+const maxToolRounds = 4
+
 // Ask answers one question, grounded in `grounding` — plain text the caller
-// has already assembled from the account's real balances/activity. Not a
-// multi-turn conversation: each question is independent, so there is no
-// history to manage and no cross-question cache to invalidate.
-func (c *Client) Ask(ctx context.Context, question, grounding string) (string, error) {
+// has already assembled from the account's real balances/activity — plus
+// whatever tools lets the model fetch beyond that (a live price, more
+// activity rows). Not a multi-turn conversation across questions: each
+// question starts a fresh message history: there is no cross-question cache
+// to invalidate. Within one question, though, the model may call a tool,
+// read its result, and call another before answering — that loop is what
+// this function runs.
+func (c *Client) Ask(ctx context.Context, question, grounding string, tools []gateway.Tool) (gateway.Answer, error) {
+	byName := make(map[string]gateway.Tool, len(tools))
+	toolParams := make([]anthropic.ToolUnionParam, 0, len(tools))
+	for _, t := range tools {
+		byName[t.Name] = t
+		tp := anthropic.ToolUnionParamOfTool(anthropic.ToolInputSchemaParam{
+			Properties: t.Properties,
+			Required:   t.Required,
+		}, t.Name)
+		tp.OfTool.Description = param.NewOpt(t.Description)
+		toolParams = append(toolParams, tp)
+	}
+
 	msg := fmt.Sprintf("Account data:\n%s\n\nQuestion: %s", grounding, question)
-	resp, err := c.api.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:     anthropic.Model(c.model),
-		MaxTokens: maxTokens,
-		System:    []anthropic.TextBlockParam{{Text: systemPrompt}},
-		Messages: []anthropic.MessageParam{
-			anthropic.NewUserMessage(anthropic.NewTextBlock(msg)),
-		},
-	})
-	if err != nil {
-		return "", fmt.Errorf("assistant: %w", err)
-	}
-	for _, block := range resp.Content {
-		if b, ok := block.AsAny().(anthropic.TextBlock); ok {
-			return b.Text, nil
+	messages := []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(msg))}
+
+	var displays []gateway.DisplayPart
+	for round := 0; round < maxToolRounds; round++ {
+		resp, err := c.api.Messages.New(ctx, anthropic.MessageNewParams{
+			Model:     anthropic.Model(c.model),
+			MaxTokens: maxTokens,
+			System:    []anthropic.TextBlockParam{{Text: systemPrompt}},
+			Messages:  messages,
+			Tools:     toolParams,
+		})
+		if err != nil {
+			return gateway.Answer{}, fmt.Errorf("assistant: %w", err)
 		}
+
+		var text string
+		var assistantBlocks []anthropic.ContentBlockParamUnion
+		var toolUses []anthropic.ToolUseBlock
+		for _, block := range resp.Content {
+			switch b := block.AsAny().(type) {
+			case anthropic.TextBlock:
+				text += b.Text
+				assistantBlocks = append(assistantBlocks, anthropic.NewTextBlock(b.Text))
+			case anthropic.ToolUseBlock:
+				toolUses = append(toolUses, b)
+				assistantBlocks = append(assistantBlocks, anthropic.NewToolUseBlock(b.ID, b.Input, b.Name))
+			}
+		}
+
+		if resp.StopReason != anthropic.StopReasonToolUse || len(toolUses) == 0 {
+			if text == "" {
+				return gateway.Answer{}, fmt.Errorf("assistant: no text in response")
+			}
+			return gateway.Answer{Text: text, Displays: displays}, nil
+		}
+
+		messages = append(messages, anthropic.NewAssistantMessage(assistantBlocks...))
+
+		resultBlocks := make([]anthropic.ContentBlockParamUnion, 0, len(toolUses))
+		for _, tu := range toolUses {
+			tool, ok := byName[tu.Name]
+			if !ok {
+				resultBlocks = append(resultBlocks, anthropic.NewToolResultBlock(tu.ID, "unknown tool", true))
+				continue
+			}
+			result, err := tool.Run(ctx, json.RawMessage(tu.Input))
+			if err != nil {
+				resultBlocks = append(resultBlocks, anthropic.NewToolResultBlock(tu.ID, err.Error(), true))
+				continue
+			}
+			if result.Display != nil {
+				displays = append(displays, *result.Display)
+			}
+			resultBlocks = append(resultBlocks, anthropic.NewToolResultBlock(tu.ID, result.Text, false))
+		}
+		messages = append(messages, anthropic.NewUserMessage(resultBlocks...))
 	}
-	return "", fmt.Errorf("assistant: no text in response")
+	return gateway.Answer{}, fmt.Errorf("assistant: exceeded %d tool-call rounds", maxToolRounds)
 }

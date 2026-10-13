@@ -1035,18 +1035,20 @@ func TestSponsorshipOutlivesTheSigningWindow(t *testing.T) {
 	}
 }
 
-// fakeAssistant records the question and grounding it was actually called
-// with, so a test can assert the service builds grounding text from real
-// balances/activity rather than trusting internal/assistant's own (already
-// tested against a live account) behaviour.
+// fakeAssistant records the question, grounding, and tools it was actually
+// called with, so a test can assert the service builds grounding text from
+// real balances/activity and wires up the expected tools, rather than
+// trusting internal/assistant's own (already tested against a live
+// account) behaviour.
 type fakeAssistant struct {
 	gotQuestion, gotGrounding string
-	answer                    string
+	gotTools                  []Tool
+	answer                    Answer
 	err                       error
 }
 
-func (f *fakeAssistant) Ask(_ context.Context, question, grounding string) (string, error) {
-	f.gotQuestion, f.gotGrounding = question, grounding
+func (f *fakeAssistant) Ask(_ context.Context, question, grounding string, tools []Tool) (Answer, error) {
+	f.gotQuestion, f.gotGrounding, f.gotTools = question, grounding, tools
 	return f.answer, f.err
 }
 
@@ -1059,7 +1061,7 @@ func TestAssistUnavailableWithoutAConfiguredAssistant(t *testing.T) {
 
 func TestAssistRefusesAnEmptyQuestion(t *testing.T) {
 	r := newRig(t)
-	r.svc.d.Assistant = &fakeAssistant{answer: "unused"}
+	r.svc.d.Assistant = &fakeAssistant{answer: Answer{Text: "unused"}}
 	if _, err := r.svc.Assist(context.Background(), testAccount, "   "); errCode(err) != "empty_question" {
 		t.Fatalf("got %v, want empty_question", err)
 	}
@@ -1067,7 +1069,7 @@ func TestAssistRefusesAnEmptyQuestion(t *testing.T) {
 
 func TestAssistGroundsTheQuestionInRealBalances(t *testing.T) {
 	r := newRig(t)
-	fa := &fakeAssistant{answer: "You hold 50 TST."}
+	fa := &fakeAssistant{answer: Answer{Text: "You hold 50 TST."}}
 	r.svc.d.Assistant = fa
 	r.markets.markets = []store.Market{nativeMarket()}
 	r.chain.set(func(f *fakeChain) { f.balance = big.NewInt(50_000_000) }) // 50 TST @ 6dp
@@ -1084,6 +1086,51 @@ func TestAssistGroundsTheQuestionInRealBalances(t *testing.T) {
 	}
 	if !strings.Contains(fa.gotGrounding, "50") || !strings.Contains(fa.gotGrounding, "TST") {
 		t.Errorf("grounding = %q, want it to mention the real 50 TST balance", fa.gotGrounding)
+	}
+}
+
+func TestAssistOffersToolsAndSurfacesDisplaysFromThem(t *testing.T) {
+	r := newRig(t)
+	fa := &fakeAssistant{}
+	r.svc.d.Assistant = fa
+	r.markets.markets = []store.Market{nativeMarket()}
+	r.chain.set(func(f *fakeChain) { f.balance = big.NewInt(50_000_000) })
+
+	// Exercise show_balances end to end, as the assistant package's loop
+	// would: run the tool the service handed in, and confirm what comes
+	// back carries a display part the model never has to restate as text.
+	var balancesTool *Tool
+	_, err := r.svc.Assist(context.Background(), testAccount, "what do I hold?")
+	if err != nil {
+		t.Fatalf("Assist: %v", err)
+	}
+	wantNames := map[string]bool{"show_balances": false, "show_recent_activity": false, "show_market_quote": false}
+	for _, tool := range fa.gotTools {
+		if _, ok := wantNames[tool.Name]; ok {
+			wantNames[tool.Name] = true
+		}
+		if tool.Name == "show_balances" {
+			t := tool
+			balancesTool = &t
+		}
+	}
+	for name, got := range wantNames {
+		if !got {
+			t.Errorf("tool %q was not offered to the assistant", name)
+		}
+	}
+	if balancesTool == nil {
+		t.Fatal("show_balances tool not found")
+	}
+	result, err := balancesTool.Run(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("show_balances.Run: %v", err)
+	}
+	if result.Display == nil || result.Display.Type != "balances_card" {
+		t.Fatalf("Display = %+v, want a balances_card", result.Display)
+	}
+	if !strings.Contains(result.Text, "50") || !strings.Contains(result.Text, "TST") {
+		t.Errorf("Text = %q, want it to mention the real 50 TST balance", result.Text)
 	}
 }
 
