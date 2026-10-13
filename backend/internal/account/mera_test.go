@@ -39,7 +39,7 @@ func eip191Sign(t *testing.T, key *ecdsa.PrivateKey, userOpHash common.Hash) []b
 func TestVerifyMeraSignature_AcceptsAGenuineSignature(t *testing.T) {
 	key := mustKey(t)
 	owner := crypto.PubkeyToAddress(key.PublicKey)
-	userOpHash := common.HexToHash("0x1122334455667788112233445566778811223344556677881122334455667788")
+	userOpHash := crypto.Keccak256Hash([]byte("genuine"))
 
 	sig := eip191Sign(t, key, userOpHash)
 	if err := VerifyMeraSignature(userOpHash, sig, owner); err != nil {
@@ -50,7 +50,7 @@ func TestVerifyMeraSignature_AcceptsAGenuineSignature(t *testing.T) {
 func TestVerifyMeraSignature_RejectsTheWrongOwner(t *testing.T) {
 	key := mustKey(t)
 	other := mustKey(t)
-	userOpHash := common.HexToHash("0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+	userOpHash := crypto.Keccak256Hash([]byte("wrong owner"))
 
 	sig := eip191Sign(t, key, userOpHash)
 	wrongOwner := crypto.PubkeyToAddress(other.PublicKey)
@@ -69,8 +69,8 @@ func TestVerifyMeraSignature_RejectsAShortSignature(t *testing.T) {
 func TestVerifyMeraSignature_RejectsASignatureOverADifferentHash(t *testing.T) {
 	key := mustKey(t)
 	owner := crypto.PubkeyToAddress(key.PublicKey)
-	signed := common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
-	other := common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222")
+	signed := crypto.Keccak256Hash([]byte("signed"))
+	other := crypto.Keccak256Hash([]byte("other"))
 
 	sig := eip191Sign(t, key, signed)
 	if err := VerifyMeraSignature(other, sig, owner); err == nil {
