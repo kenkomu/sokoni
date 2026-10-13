@@ -1,13 +1,14 @@
+import 'dart:convert';
+import 'dart:math';
+
 import 'package:flutter/foundation.dart';
 
-import '../../core/money.dart';
-
 import '../../core/config.dart';
+import '../../core/money.dart';
 import '../../data/api/sokoni_api.dart';
-import 'package:passkeys/authenticator.dart';
-
 import '../../data/passkey/passkey_authenticator.dart';
 import '../../data/passkey/passkey_service.dart';
+import '../../data/passkey/passkey_signer.dart';
 
 /// What the onboarding screen is currently doing.
 enum PasskeyStage { idle, checking, registering, sending }
@@ -91,17 +92,7 @@ class PasskeyController extends ChangeNotifier {
     SokoniApi? api,
     this.pollInterval = const Duration(seconds: 1),
     this.pollTimeout = const Duration(seconds: 90),
-  }) : _service =
-           service ??
-           PasskeyAuthenticatorService(
-             relyingPartyId: config.relyingPartyId,
-             relyingPartyName: 'Sokoni',
-             // Passkeys Doctor: surfaces *why* a Digital Asset Links check
-             // failed (wrong fingerprint, wrong content-type, a redirect)
-             // instead of the platform's own opaque failure. Debug-only —
-             // never worth the noise in a release build.
-             authenticator: PasskeyAuthenticator(debugMode: kDebugMode),
-           ),
+  }) : _service = service ?? passkeyServiceFor(config),
        _api = api ?? SokoniApi(baseUrl: config.apiBaseUrl);
 
   final PasskeyAuthenticatorService _service;
@@ -159,12 +150,14 @@ class PasskeyController extends ChangeNotifier {
   Future<void> createPasskey() async {
     _set(_state.copyWith(stage: PasskeyStage.registering, clearError: true));
     try {
+      // A fresh user id per signup: the platform replaces any passkey with
+      // the same relying party and user id, so a fixed one would silently
+      // orphan the previous account's only key on a second signup.
+      final userId = _randomUserId();
       final registered = await _service.register(
-        // A real signup takes these from the account the backend created. Here
-        // they only label the credential in the platform's passkey manager.
-        userId: 'sokoni-demo-user',
-        userName: 'demo@sokoni.bitshada.com',
-        displayName: 'Sokoni demo',
+        userId: userId,
+        userName: 'Sokoni ${userId.substring(0, 6)}',
+        displayName: 'Sokoni account',
       );
       _set(_state.copyWith(registered: registered));
       await _registerWithGateway(registered);
@@ -173,6 +166,14 @@ class PasskeyController extends ChangeNotifier {
         _state.copyWith(stage: PasskeyStage.idle, error: describeFailure(e)),
       );
     }
+  }
+
+  /// Signs back in with a passkey this device already created, instead of
+  /// minting another — the gateway's register call is idempotent for the
+  /// same credential and key.
+  Future<void> useExisting(RegisteredPasskey registered) async {
+    _set(_state.copyWith(registered: registered));
+    await registerAccount();
   }
 
   /// Retry the gateway half of registration, without a new passkey.
@@ -308,3 +309,9 @@ String describeAmount(Object error) =>
         ? 'That amount doesn\'t look right — use plain digits and, if '
             'needed, one decimal point.'
         : describeFailure(error);
+
+String _randomUserId() {
+  final rng = Random.secure();
+  final bytes = List<int>.generate(16, (_) => rng.nextInt(256));
+  return base64Url.encode(bytes).replaceAll('=', '');
+}

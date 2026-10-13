@@ -85,7 +85,7 @@ class MeraKeyService {
 /// A [Signer] backed by an on-device key held in [MeraKeyService]'s secure
 /// storage. Signing never leaves the device — no network round trip, unlike
 /// a connected wallet's [Signer] implementation.
-class LocalKeySigner implements Signer {
+class LocalKeySigner extends EcdsaSigner {
   LocalKeySigner(this._key, {MeraKeyService? keyService})
     : _keyService = keyService ?? MeraKeyService();
 

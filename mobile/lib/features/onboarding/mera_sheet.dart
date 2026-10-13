@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/config.dart';
 import '../../core/session_store.dart';
 import '../../data/api/sokoni_api.dart';
+import '../../data/signer.dart';
 import '../../design/app_shell.dart';
 import '../../design/theme.dart';
 import 'mera_controller.dart';
@@ -113,7 +114,8 @@ class _MeraSheetState extends State<_MeraSheet> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final state = _controller.state;
-    final key = state.signer;
+    final signer = state.signer;
+    final key = signer is EcdsaSigner ? signer : null;
 
     return Padding(
       padding: EdgeInsets.fromLTRB(

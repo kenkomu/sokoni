@@ -7,6 +7,7 @@ import 'package:flutter_secure_storage_platform_interface/flutter_secure_storage
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sokoni/core/config.dart';
 import 'package:sokoni/data/mera/mera_key_service.dart';
+import 'package:sokoni/data/signer.dart';
 import 'package:sokoni/features/onboarding/mera_controller.dart';
 import 'package:web3dart/crypto.dart';
 
@@ -159,120 +160,114 @@ void main() {
     expect((submitted['signature'] as String).length, 2 + 65 * 2);
   });
 
-  test(
-    'load key → account → sendTrade → watch it land, amount scaled by '
-    'the given decimals not the sponsored token\'s',
-    () async {
-      final gw = _gateway(owner: owner);
-      final c = controller(gw);
+  test('load key → account → sendTrade → watch it land, amount scaled by '
+      'the given decimals not the sponsored token\'s', () async {
+    final gw = _gateway(owner: owner);
+    final c = controller(gw);
 
-      await c.loadOrCreateKey();
+    await c.loadOrCreateKey();
 
-      // 18 decimals (e.g. ETH-USDC's base asset), not the sponsored token's
-      // 6 -- proves sendTrade uses the decimals it's given, not state.token.
-      await c.sendTrade(
-        market: 'ETH-USDC',
-        side: 'sell',
-        amountHuman: '0.01',
-        decimals: 18,
-      );
+    // 18 decimals (e.g. ETH-USDC's base asset), not the sponsored token's
+    // 6 -- proves sendTrade uses the decimals it's given, not state.token.
+    await c.sendTrade(
+      market: 'ETH-USDC',
+      side: 'sell',
+      amountHuman: '0.01',
+      decimals: 18,
+    );
 
-      expect(c.state.op?.status, 'landed');
-      expect(c.state.error, isNull);
-      expect(gw.lastBody('POST', '/v1/mera/ops')['intent'], {
-        'kind': 'trade',
-        'market': 'ETH-USDC',
-        'side': 'sell',
-        'amount': '10000000000000000', // 0.01 * 1e18
-      });
-      final submitted = gw.lastBody('POST', '/v1/mera/ops/op_1/submit');
-      expect(submitted['owner'], owner);
-      expect(submitted['signature'], startsWith('0x'));
-    },
-  );
+    expect(c.state.op?.status, 'landed');
+    expect(c.state.error, isNull);
+    expect(gw.lastBody('POST', '/v1/mera/ops')['intent'], {
+      'kind': 'trade',
+      'market': 'ETH-USDC',
+      'side': 'sell',
+      'amount': '10000000000000000', // 0.01 * 1e18
+    });
+    final submitted = gw.lastBody('POST', '/v1/mera/ops/op_1/submit');
+    expect(submitted['owner'], owner);
+    expect(submitted['signature'], startsWith('0x'));
+  });
 
   test('an existing on-device key is reused, not regenerated', () async {
     final gw = _gateway(owner: owner);
     final c1 = controller(gw);
     await c1.loadOrCreateKey();
-    final first = c1.state.signer!.address;
+    final first = (c1.state.signer! as EcdsaSigner).address;
 
     final c2 = controller(_gateway(owner: owner));
     await c2.loadOrCreateKey();
 
-    expect(c2.state.signer!.address, first);
+    expect((c2.state.signer! as EcdsaSigner).address, first);
+  });
+
+  test('the signature recovers to the account owner, over the exact prepared '
+      'challenge, EIP-191-wrapped — the same check '
+      'backend/internal/account/mera.go\'s VerifyMeraSignature does', () async {
+    final gw = _gateway(owner: owner);
+    final c = controller(gw);
+    await c.loadOrCreateKey();
+    await c.send(to: '0xR', amount: '1');
+
+    final sigHex =
+        gw.lastBody('POST', '/v1/mera/ops/op_1/submit')['signature'] as String;
+    final sigBytes = hexToBytes(sigHex);
+    expect(sigBytes.length, 65);
+
+    final challenge = Uint8List.fromList(List.filled(32, 0xab));
+    final prefixed = Uint8List.fromList(
+      utf8.encode('\x19Ethereum Signed Message:\n32') + challenge,
+    );
+    final digest = keccak256(prefixed);
+
+    // v is already 27 or 28 — web3dart's signPersonalMessageToUint8List
+    // (same as backend/internal/account/mera.go's VerifyMeraSignature)
+    // emits it in that range directly, so it goes to ecRecover unchanged.
+    // Forcing it to a fixed value here would make this test pass or fail
+    // by luck of which recovery id a given random key happened to need.
+    final v = sigBytes[64];
+    // r and s are unsigned 256-bit values, so this needs
+    // bytesToUnsignedInt — bytesToInt (used elsewhere for private keys) is
+    // two's-complement and misreads any r/s whose top byte is >= 0x80 as
+    // negative, which happens for about half of all random keys and
+    // crashes ecRecover's internal unsignedIntToBytes assertion.
+    final recovered = ecRecover(
+      digest,
+      MsgSignature(
+        bytesToUnsignedInt(sigBytes.sublist(0, 32)),
+        bytesToUnsignedInt(sigBytes.sublist(32, 64)),
+        v,
+      ),
+    );
+    final recoveredAddress = '0x${bytesToHex(publicKeyToAddress(recovered))}';
+    expect(recoveredAddress.toLowerCase(), owner.toLowerCase());
   });
 
   test(
-    'the signature recovers to the account owner, over the exact prepared '
-    'challenge, EIP-191-wrapped — the same check '
-    'backend/internal/account/mera.go\'s VerifyMeraSignature does',
+    'a malformed amount is refused before it ever reaches the gateway',
     () async {
       final gw = _gateway(owner: owner);
       final c = controller(gw);
       await c.loadOrCreateKey();
-      await c.send(to: '0xR', amount: '1');
 
-      final sigHex = gw.lastBody(
-        'POST',
-        '/v1/mera/ops/op_1/submit',
-      )['signature'] as String;
-      final sigBytes = hexToBytes(sigHex);
-      expect(sigBytes.length, 65);
+      await c.send(to: '0xR', amount: 'not a number');
 
-      final challenge = Uint8List.fromList(List.filled(32, 0xab));
-      final prefixed = Uint8List.fromList(
-        utf8.encode('\x19Ethereum Signed Message:\n32') + challenge,
-      );
-      final digest = keccak256(prefixed);
-
-      // v is already 27 or 28 — web3dart's signPersonalMessageToUint8List
-      // (same as backend/internal/account/mera.go's VerifyMeraSignature)
-      // emits it in that range directly, so it goes to ecRecover unchanged.
-      // Forcing it to a fixed value here would make this test pass or fail
-      // by luck of which recovery id a given random key happened to need.
-      final v = sigBytes[64];
-      // r and s are unsigned 256-bit values, so this needs
-      // bytesToUnsignedInt — bytesToInt (used elsewhere for private keys) is
-      // two's-complement and misreads any r/s whose top byte is >= 0x80 as
-      // negative, which happens for about half of all random keys and
-      // crashes ecRecover's internal unsignedIntToBytes assertion.
-      final recovered = ecRecover(
-        digest,
-        MsgSignature(
-          bytesToUnsignedInt(sigBytes.sublist(0, 32)),
-          bytesToUnsignedInt(sigBytes.sublist(32, 64)),
-          v,
-        ),
-      );
-      final recoveredAddress = '0x${bytesToHex(publicKeyToAddress(recovered))}';
-      expect(recoveredAddress.toLowerCase(), owner.toLowerCase());
+      expect(c.state.error, contains('digits'));
+      expect(gw.count('POST', '/v1/mera/ops'), 0);
     },
   );
-
-  test('a malformed amount is refused before it ever reaches the gateway', () async {
-    final gw = _gateway(owner: owner);
-    final c = controller(gw);
-    await c.loadOrCreateKey();
-
-    await c.send(to: '0xR', amount: 'not a number');
-
-    expect(c.state.error, contains('digits'));
-    expect(gw.count('POST', '/v1/mera/ops'), 0);
-  });
 
   test(
     'if the gateway is down at signup, the key is kept and only the lookup retries',
     () async {
       var up = false;
-      final gw =
-          _gateway(owner: owner)..on('POST', '/v1/mera/accounts', (_) {
-            if (!up) throw const SocketException('Connection refused');
-            return (
-              status: 201,
-              body: {'owner': owner, 'address': '0xACC7', 'deployed': false},
-            );
-          });
+      final gw = _gateway(owner: owner)..on('POST', '/v1/mera/accounts', (_) {
+        if (!up) throw const SocketException('Connection refused');
+        return (
+          status: 201,
+          body: {'owner': owner, 'address': '0xACC7', 'deployed': false},
+        );
+      });
       final c = controller(gw);
 
       await c.loadOrCreateKey();

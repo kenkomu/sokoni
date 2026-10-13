@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../../core/config.dart';
+import '../../core/session_store.dart';
 import '../../data/api/sokoni_api.dart';
 import '../../data/passkey/passkey_service.dart';
+import '../../data/passkey/passkey_signer.dart';
 import '../../design/app_shell.dart';
 import '../../design/theme.dart';
 import 'passkey_controller.dart';
@@ -61,7 +63,15 @@ class _PasskeySheetState extends State<_PasskeySheet> {
   Future<void> _start() async {
     await _controller.checkAvailability();
     if (!mounted || _controller.state.available == false) return;
-    await _controller.createPasskey();
+    // A passkey this device already made (then logged out of) signs back
+    // into the same account rather than minting a second, empty one.
+    final existing = await PasskeyCredentialStore().load();
+    if (!mounted) return;
+    if (existing != null) {
+      await _controller.useExisting(existing);
+    } else {
+      await _controller.createPasskey();
+    }
   }
 
   void _onChanged() {
@@ -73,12 +83,16 @@ class _PasskeySheetState extends State<_PasskeySheet> {
     }
   }
 
-  void _enterApp(AccountInfo account) {
-    if (!mounted) return;
+  Future<void> _enterApp(AccountInfo account) async {
+    final registered = _controller.state.registered;
+    if (!mounted || registered == null) return;
+    final signer = PasskeySigner(registered, config: widget.config);
+    final navigator = Navigator.of(context);
+    await PasskeyCredentialStore().save(registered);
+    await SessionStore().save(SignedInKind.passkey);
     // Same Navigator both calls: close the sheet, then replace the welcome
     // page underneath it with AppShell, so the back button from AppShell
     // never lands back on either.
-    final navigator = Navigator.of(context);
     navigator.pop();
     navigator.pushReplacement(
       MaterialPageRoute(
@@ -86,22 +100,18 @@ class _PasskeySheetState extends State<_PasskeySheet> {
             (_) => AppShell(
               config: widget.config,
               account: account,
-              // No SessionStore marker saved here: there is no restore path
-              // for a passkey account yet (see AppShell.signer's doc — this
-              // path has no Signer at all), so there is nothing a cold
-              // start could actually restore. onLogout/onSwitchWallet still
-              // clear any *other* path's leftover marker defensively.
+              signer: signer,
               onLogout:
                   () => signOut(
                     navigator,
-                    null,
+                    signer,
                     widget.config,
                     autoOpenConnect: false,
                   ),
               onSwitchWallet:
                   () => signOut(
                     navigator,
-                    null,
+                    signer,
                     widget.config,
                     autoOpenConnect: true,
                   ),

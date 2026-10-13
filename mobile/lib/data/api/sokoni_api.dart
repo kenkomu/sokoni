@@ -107,6 +107,26 @@ class SokoniApi {
     }),
   );
 
+  /// Ask for a market buy or sell, same intent and amount rules as
+  /// [prepareMeraTrade] — the gateway builds the identical Kuru call for a
+  /// passkey account.
+  Future<PreparedOp> prepareTrade({
+    required String credentialId,
+    required String market,
+    required String side,
+    required String amount,
+  }) async => PreparedOp.fromJson(
+    await _post('/v1/ops', {
+      'credentialId': credentialId,
+      'intent': {
+        'kind': 'trade',
+        'market': market,
+        'side': side,
+        'amount': amount,
+      },
+    }),
+  );
+
   /// Hand back the signed assertion exactly as [PasskeyAssertion.toJson]
   /// emits it. The gateway accepts that shape as-is, so there is no mapping
   /// layer in between to drift out of step.

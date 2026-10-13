@@ -20,7 +20,7 @@ import 'wallet_connect_service.dart';
 /// UserOperation, submitting it, paying gas) happens in the gateway, exactly
 /// as it does for [LocalKeySigner] — this signer's only job is producing
 /// the same 65-byte r||s||v signature over the same EIP-191-wrapped hash.
-class WalletConnectSigner implements Signer {
+class WalletConnectSigner extends EcdsaSigner {
   WalletConnectSigner(this._client, this._session, {required this.chainId});
 
   final ReownSignClient _client;

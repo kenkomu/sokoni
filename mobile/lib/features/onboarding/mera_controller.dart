@@ -154,7 +154,7 @@ class MeraController extends ChangeNotifier {
   Future<void> _registerWithGateway(Signer signer) async {
     _set(_state.copyWith(stage: MeraStage.registering, clearError: true));
     try {
-      final account = await _api.registerMeraAccount(owner: signer.address);
+      final account = await signer.register(_api);
       _set(_state.copyWith(stage: MeraStage.idle, account: account));
     } catch (e) {
       _set(_state.copyWith(stage: MeraStage.idle, error: describeFailure(e)));
@@ -169,9 +169,8 @@ class MeraController extends ChangeNotifier {
   }
 
   /// Send [amount] whole tokens of the gateway's sponsored token to [to].
-  /// Mirrors PasskeyController.send exactly, but the "biometric prompt" step
-  /// is a local ECDSA sign — no platform dialog, because there is no
-  /// WebAuthn assertion in this path.
+  /// The signer decides how it is authorised: a local ECDSA sign, a wallet
+  /// app's prompt, or a passkey's biometric prompt.
   Future<void> send({required String to, required String amount}) async {
     final signer = _state.signer;
     if (signer == null || _state.account == null) return;
@@ -200,20 +199,13 @@ class MeraController extends ChangeNotifier {
       }
 
       final baseUnits = Money.parse(amount, token.decimals).units.toString();
-      final prepared = await _api.prepareMeraTransfer(
-        owner: signer.address,
+      final prepared = await signer.prepareTransfer(
+        _api,
         token: token.address,
         to: to,
         amount: baseUnits,
       );
-
-      final signature = await signer.sign(prepared.challenge);
-
-      await _api.submitMera(
-        opId: prepared.opId,
-        owner: signer.address,
-        signature: signature,
-      );
+      await signer.authorize(_api, prepared);
       await _watch(prepared.opId);
     } catch (e) {
       _set(_state.copyWith(stage: MeraStage.idle, error: describeAmount(e)));
@@ -242,20 +234,13 @@ class MeraController extends ChangeNotifier {
     );
     try {
       final baseUnits = Money.parse(amountHuman, decimals).units.toString();
-      final prepared = await _api.prepareMeraTrade(
-        owner: signer.address,
+      final prepared = await signer.prepareTrade(
+        _api,
         market: market,
         side: side,
         amount: baseUnits,
       );
-
-      final signature = await signer.sign(prepared.challenge);
-
-      await _api.submitMera(
-        opId: prepared.opId,
-        owner: signer.address,
-        signature: signature,
-      );
+      await signer.authorize(_api, prepared);
       await _watch(prepared.opId);
     } catch (e) {
       _set(_state.copyWith(stage: MeraStage.idle, error: describeAmount(e)));

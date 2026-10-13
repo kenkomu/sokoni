@@ -19,23 +19,13 @@ const _previewAccount = AccountInfo(
 );
 
 /// The app's first screen — copy and layout match Screen 1 of the "Crypto
-/// Trading App Design" Figma community file. Two real entry points, both
-/// going through the same [MeraController]/gateway flow with only the
-/// signer type differing ([WalletConnectSigner] vs. [LocalKeySigner] — see
-/// data/signer.dart): [showWalletConnectSheet] for someone who already has
-/// a wallet, [showMeraSheet] for someone who doesn't — a key generated and
-/// held on this device, no external app required, no seed phrase to write
-/// down. Before this, a visitor with no wallet app installed had no way
-/// into the app at all.
-///
-/// [showPasskeySheet]'s WebAuthn path is wired up and tested too, but stays
-/// behind the `[kDebugMode]`-only spike button lower on this screen: no
-/// physical device has ever completed a passkey ceremony against a live
-/// `sokoni.bitshada.com` assetlinks.json yet, unlike the Mera path above,
-/// which this session's own trades have already proven live on mainnet.
-/// Promote it once that's confirmed. The `passkeys` plugin this app pins
-/// (2.22.3) also exposes no PRF extension to back Mera's real vault scheme
-/// — see mera_key_service.dart.
+/// Trading App Design" Figma community file. Three entry points, all going
+/// through the same [MeraController]/gateway flow with only the [Signer]
+/// differing (see data/signer.dart): [showWalletConnectSheet] for someone
+/// who already has a wallet, [showPasskeySheet] for someone who doesn't —
+/// a passkey in the phone's own authenticator, every trade approved with a
+/// fingerprint — and [showMeraSheet] as the fallback for a phone without
+/// passkey support: a key held in this device's secure storage.
 class WelcomeScreen extends StatefulWidget {
   const WelcomeScreen({
     required this.config,
@@ -110,33 +100,25 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                         const SizedBox(height: 12),
                       ],
                       _GradientPillButton(
+                        label: 'Sign up with your fingerprint',
+                        onPressed: () => showPasskeySheet(context, config),
+                      ),
+                      const SizedBox(height: 12),
+                      _OutlinePillButton(
                         label: 'Connect a wallet',
                         onPressed:
                             () => showWalletConnectSheet(context, config),
                       ),
-                      const SizedBox(height: 12),
-                      // The real no-wallet path: a key generated and held on
-                      // this device, same production gateway flow the
-                      // wallet-connect button above uses — see this file's
-                      // own doc for why this is the Mera sheet and not the
-                      // still-unproven WebAuthn one.
-                      _OutlinePillButton(
-                        label: "I don't have a wallet",
-                        onPressed: () => showMeraSheet(context, config),
-                      ),
-                      const SizedBox(height: 12),
-                      if (kDebugMode) ...[
-                        // SPIKE: proving one real device can complete a
-                        // WebAuthn ceremony against a live assetlinks.json
-                        // is the one open unknown gating promoting this to
-                        // a real button — see docs/adr and CLAUDE.md's
-                        // Known gaps.
-                        _OutlinePillButton(
-                          label: 'Create a wallet (passkey spike)',
-                          onPressed: () => showPasskeySheet(context, config),
+                      const SizedBox(height: 4),
+                      Center(
+                        child: TextButton(
+                          onPressed: () => showMeraSheet(context, config),
+                          child: const Text(
+                            'No fingerprint? Use a key stored on this device',
+                            textAlign: TextAlign.center,
+                          ),
                         ),
-                        const SizedBox(height: 12),
-                      ],
+                      ),
                       const SizedBox(height: 4),
                       // Row + Flexible, not Center + mainAxisSize.min: the
                       // longer copy needed for two onboarding paths no

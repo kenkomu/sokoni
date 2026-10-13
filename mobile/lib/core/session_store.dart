@@ -7,11 +7,13 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 /// already persist themselves) — this only remembers *which one to ask*.
 enum SignedInKind {
   localKey,
-  walletConnect;
+  walletConnect,
+  passkey;
 
   static SignedInKind? fromName(String? name) => switch (name) {
     'localKey' => localKey,
     'walletConnect' => walletConnect,
+    'passkey' => passkey,
     _ => null,
   };
 }

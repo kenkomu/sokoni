@@ -35,13 +35,11 @@ class AppShell extends StatefulWidget {
   /// switch to (the passkey and debug-preview paths).
   final Future<void> Function()? onSwitchWallet;
 
-  /// The signer that got this account into the app — an on-device key or a
-  /// connected wallet — threaded down to every screen with a Buy/Sell button
-  /// so a trade signs with the *same* key the account's balance belongs to.
-  /// Null for the passkey path (WebAuthn isn't a [Signer]; trading for a
-  /// passkey-owned account isn't wired up yet — see CLAUDE.md's Known gaps)
-  /// and the debug preview account, both of which show account data but
-  /// were never really signed into.
+  /// The signer that got this account into the app — an on-device key, a
+  /// connected wallet, or a passkey — threaded down to every screen with a
+  /// Buy/Sell button so a trade signs with the *same* key the account's
+  /// balance belongs to. Null only for the debug preview account, which
+  /// shows account data but was never really signed into.
   final Signer? signer;
 
   @override

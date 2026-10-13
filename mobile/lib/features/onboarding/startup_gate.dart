@@ -4,6 +4,7 @@ import '../../core/config.dart';
 import '../../core/session_store.dart';
 import '../../data/api/sokoni_api.dart';
 import '../../data/mera/mera_key_service.dart';
+import '../../data/passkey/passkey_signer.dart';
 import '../../data/signer.dart';
 import '../../data/wallet_connect/wallet_connect_service.dart';
 import '../../data/wallet_connect/wallet_connect_signer.dart';
@@ -46,6 +47,9 @@ class _StartupGateState extends State<StartupGate> {
       case SignedInKind.walletConnect:
         await _restoreWalletConnect();
         return;
+      case SignedInKind.passkey:
+        await _restorePasskey();
+        return;
     }
     _goWelcome();
   }
@@ -61,6 +65,16 @@ class _StartupGateState extends State<StartupGate> {
       return;
     }
     await _registerAndEnter(LocalKeySigner(key, keyService: MeraKeyService()));
+  }
+
+  Future<void> _restorePasskey() async {
+    final passkey = await PasskeyCredentialStore().load();
+    if (passkey == null) {
+      await SessionStore().clear();
+      _goWelcome();
+      return;
+    }
+    await _registerAndEnter(PasskeySigner(passkey, config: widget.config));
   }
 
   Future<void> _restoreWalletConnect() async {
