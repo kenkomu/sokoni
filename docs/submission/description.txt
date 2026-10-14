@@ -1,0 +1,45 @@
+Sokoni (Swahili for "at the market") is a mobile trading app on Monad that someone with no crypto experience can use: sign in with a fingerprint, hold dollars, buy MON, ETH, BTC or gold, and never see a seed phrase or pay gas.
+
+THE PROBLEM
+
+Onchain order books are now fast enough for real trading. Monad gives 0.3 s blocks, and Kuru runs a fully onchain order book on it. But the way in is still built for crypto natives. A first trade means installing a wallet, writing down 12 words, finding the native token to pay gas, approving a token, then signing transactions you can't read. On a phone that's where most people give up, and in markets like East Africa, where people already use mobile money every day, the app is the whole product.
+
+THE SOLUTION
+
+Sokoni keeps the trading onchain and makes the phone side simple:
+
+- Your fingerprint is your wallet. Every account is an ERC-4337 smart account owned by a passkey from the phone's secure enclave. Monad's P-256 precompile verifies the WebAuthn signature onchain. There is no seed phrase and no browser extension, and the private key never leaves the device. Wallet users can also connect with WalletConnect.
+- No gas, ever. Our paymaster sponsors every operation, so a new account trades with no MON in it.
+- Prices are in dollars, and amounts are in plain language. You see "Buy $20 of Tether Gold", not calldata.
+- Real markets on a real order book. Market buys and sells go straight to Kuru's onchain order book on Monad mainnet: MON, ETH, BTC and Tether Gold against USDC.
+- Live charts. Candles and trades stream over a WebSocket, with zoomable charts and 24h stats.
+- Portfolio and activity. Balances are read from the chain, there's a total value, and every operation is listed with its status.
+- A support assistant that answers using your real balances, activity and market quotes, shown as cards.
+
+WHAT WORKS TODAY, VERIFIED ON CHAIN
+
+- A sponsored trade on Monad mainnet: a smart account sold 200 MON for 4.7656 USDC on Kuru through our gateway, bundler and paymaster (receipt status 1). Our account factory and a staked paymaster are deployed on mainnet.
+- The passkey account, sponsored by our paymaster through Pimlico's bundler on Monad testnet, while the account held zero MON.
+- An indexer that follows mainnet at about 20 blocks/s (6x the chain's rate) and records every Kuru fill, ledger entry and candle.
+- CI for all three codebases (Go, Flutter, Solidity) plus a secret-scanning job.
+
+HOW IT'S BUILT
+
+- Contracts (Solidity, Foundry): SokoniAccount verifies the full WebAuthn assertion (authenticator data plus clientDataJSON) using the P-256 precompile, requires user verification rather than just a tap, accepts only low-s signatures, and supports several passkeys per account. A factory deploys accounts at deterministic addresses, and a staked paymaster uses a signer that can be rotated.
+- Backend (Go): the gateway lets the phone ask only for intents, such as "buy $20 of ETH". It never sponsors arbitrary calldata, so it can't be used as a free gas tap. Every operation is two steps: prepare returns a challenge for the user to sign, and submit attaches only the signature, never rebuilding what was signed. The gateway checks each passkey assertion itself before the bundler sees it, so failed operations don't hurt the paymaster's reputation, and it refuses to sponsor a trade the account can't pay for.
+- One indexer, a deliberate design choice. If every phone polled the chain we would need about 3,000 requests/s against a measured 50/s RPC ceiling. Instead, one follower is the only thing that reads the chain, and everything else reads Postgres and Redis, so chain load stays flat however many users join. The chain is the sequencer: all app state is a projection of chain events, rebuilt by replaying them, with no distributed transactions.
+- Money is never a float. Amounts are integer base units with their decimal scale, in Go and in Dart, tested against the same cases.
+- Phone (Flutter): parses the authenticator output, rejects anything that isn't ES256, and normalises signatures to the low-s form before submitting. The phone never encodes chain data; that happens in exactly one place, in Go.
+- Shared test fixtures: the same WebAuthn and userOp vectors run in both the Solidity and the Dart/Go tests, and CI checks the copies are identical, so the phone and the contract can't drift apart.
+
+AGORA AND AUSD
+
+Sokoni is designed around AUSD as the user's cash balance. We measured Agora's Instant Settlement pair on mainnet: an exact 1:1 price and zero fees. Swapping requires the APPROVED_SWAPPER role, held by 71 addresses, so the design puts one whitelisted treasury between users and Agora: users hold and trade AUSD, and the treasury moves AUSD to and from USDC at 1:1. That role hasn't been granted to us yet, so that leg isn't live, and the MON/AUSD market on Kuru is switched off because its book is empty. Getting whitelisted switches the treasury rail on without changing the app.
+
+NOT DONE YET (STATED PLAINLY)
+
+- Market orders only: no limit orders, and no slippage limit yet (minimum output is 0).
+- Per-IP rate limits exist, but per-account sponsorship caps don't yet.
+- The Agora treasury rail is waiting on the whitelist, as described above.
+
+Sokoni shows that an onchain order book can feel like a normal finance app: a fingerprint instead of a seed phrase, dollars instead of gas, and every trade settled on Monad.
