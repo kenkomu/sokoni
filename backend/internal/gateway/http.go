@@ -91,10 +91,10 @@ type errorBody struct {
 }
 
 // assetLinksStatement is Android's Digital Asset Links shape — see
-// https://developers.google.com/digital-asset-links. The "relation" name is
-// specific: Credential Manager checks for delegate_permission/common.get_login_creds,
-// not the common.handle_all_urls relation App Links uses, and the two are not
-// interchangeable.
+// https://developers.google.com/digital-asset-links. Credential Manager
+// checks delegate_permission/common.get_login_creds; handle_all_urls is
+// listed alongside it because passkey setups that published only the first
+// still failed on-device with "RP ID cannot be validated".
 type assetLinksStatement struct {
 	Relation []string         `json:"relation"`
 	Target   assetLinksTarget `json:"target"`
@@ -110,7 +110,10 @@ func (h *handler) assetLinks(w http.ResponseWriter, _ *http.Request) {
 	statements := []assetLinksStatement{}
 	if h.svc.cfg.AndroidPackageName != "" && len(h.svc.cfg.AndroidCertFingerprints) > 0 {
 		statements = append(statements, assetLinksStatement{
-			Relation: []string{"delegate_permission/common.get_login_creds"},
+			Relation: []string{
+				"delegate_permission/common.handle_all_urls",
+				"delegate_permission/common.get_login_creds",
+			},
 			Target: assetLinksTarget{
 				Namespace:              "android_app",
 				PackageName:            h.svc.cfg.AndroidPackageName,

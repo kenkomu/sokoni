@@ -100,8 +100,8 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                         const SizedBox(height: 12),
                       ],
                       _GradientPillButton(
-                        label: 'Sign up with your fingerprint',
-                        onPressed: () => showPasskeySheet(context, config),
+                        label: "I don't have a wallet",
+                        onPressed: () => showMeraSheet(context, config),
                       ),
                       const SizedBox(height: 12),
                       _OutlinePillButton(
@@ -112,9 +112,9 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                       const SizedBox(height: 4),
                       Center(
                         child: TextButton(
-                          onPressed: () => showMeraSheet(context, config),
+                          onPressed: () => showPasskeySheet(context, config),
                           child: const Text(
-                            'No fingerprint? Use a key stored on this device',
+                            'Sign up with a passkey instead',
                             textAlign: TextAlign.center,
                           ),
                         ),

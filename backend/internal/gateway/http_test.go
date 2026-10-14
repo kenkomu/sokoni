@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -195,8 +196,8 @@ func TestAssetLinksNamesThePackageAndFingerprint(t *testing.T) {
 		t.Fatalf("statements = %v, want exactly one", statements)
 	}
 	s := statements[0]
-	if s.Relation[0] != "delegate_permission/common.get_login_creds" {
-		t.Errorf("relation = %v", s.Relation)
+	if !slices.Contains(s.Relation, "delegate_permission/common.get_login_creds") {
+		t.Errorf("relation = %v, want it to include the passkey relation", s.Relation)
 	}
 	if s.Target.PackageName != "app.sokoni" {
 		t.Errorf("package_name = %q", s.Target.PackageName)

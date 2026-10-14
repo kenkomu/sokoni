@@ -47,6 +47,13 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- The app's half of the passkey domain link: without it the
+             platform refuses sokoni.bitshada.com as an RP ID with "RP ID
+             cannot be validated", even when the site's assetlinks.json
+             lists this app correctly. -->
+        <meta-data
+            android:name="asset_statements"
+            android:resource="@string/asset_statements" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
